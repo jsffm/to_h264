@@ -1,0 +1,281 @@
+#!/bin/bash
+
+# to_h264						jsffm@web.de
+#
+# Funktioniert mit .vdr und .ts
+#
+# Ziel wird in .rec Ordner + 1 min gespeichert
+#
+# Video wird nach h264 konvertiert
+# Audio mp2 wird nach aac konvertiert
+#	bis 192 kb/s --> 128 kb/s
+#	über 192 kb/s --> 192 kb/s
+# AC3 wird kopiert
+#
+# Alle Tonspuren bleiben erhalten
+#
+# Untertitel werden kopert
+#
+# info.vdr wird ergänzt mit "L 99"
+#
+# Softhddevice spielt das Ergebnis klaglos ab
+
+#set -x
+
+subtitel=yes
+#join=yes	# concat ffmpeg >= 1.1
+
+#preset="-preset fast -tune film -profile:v main -crf 21 -maxrate 2000k -bufsize 1835k"
+preset="-preset fast -tune film -profile:v main -level 4.0 -crf 21 -maxrate 2000k -bufsize 1835k"
+#preset="-preset medium -tune film -profile:v main -crf 21"
+#preset="-preset medium -tune grain -profile:v main -crf 21"
+#preset="-preset veryslow -qp 0"
+
+#deinterlace="-deinterlace"
+deinterlace="-filter:v yadif"
+
+#aaclib="libfaac"
+aaclib="libfdk_aac" # Fraunhofer Library
+
+#test="-t 60"
+#test="-t 1"
+videodir=/video
+
+start=$(date +"%s")
+
+d=$(basename $PWD)
+d1=$(echo $d | cut -d '.' -f 1-2)
+d2=$(echo $d | cut -d '.' -f 3)
+if [ "${d2:0:1}" == "0" ]
+then
+    d2=${d2:1:1}
+fi
+d2=$(($d2+1))
+if [ ${#d2} == 1 ]
+then
+    d2=0$d2
+fi
+d3=$(echo $d | cut -d '.' -f 4-)
+dest=$d1.$d2.$d3
+
+t=/tmp/info
+t2=/tmp/info2
+if [ -e 00001.ts ]
+then
+    ffmpeg -i 00001.ts 2> $t
+    fmt=ts
+    w="*.ts"
+    info=info
+fi
+if [ -e 001.vdr ]
+then
+    ffmpeg -i 001.vdr 2> $t
+    fmt=vdr
+    w="0*.vdr"
+    info=info.vdr
+    dest=$(echo $dest | cut -d '.' -f 1-3)."1-0.rec"
+fi
+
+if [ "$fmt" == "" ]
+then
+    echo "Falsche Directory?"
+    exit
+fi
+
+mkdir ../$dest
+log="../$dest/logfile"
+d=`date +"%F %T"`
+echo "Start $d" > $log
+echo $PWD >> $log
+echo $PWD >> /tmp/h264_current
+echo $d $PWD >> /var/log/h264
+ls -lLk >> $log
+size1=$(du -L)
+size1=$(echo $size1 | cut -d ' ' -f 1)
+
+d2=$(dirname $PWD)
+title=$(basename $d2)
+#exit
+
+#info=$(ffmpeg -i 00001.ts | grep "Stream" | grep "Audio")
+#cp $t $log
+cat $t >> $log
+
+# Stream #0:0[0xad]: Video: mpeg2video (Main) ([2][0][0][0] / 0x0002), yuv420p, 720x576 [SAR 16:15 DAR 4:3], 15000 kb/s, 25 fps, 25 tbr, 90k tbn, 50 tbc
+# Stream #0:0[0x100]: Video: h264 (Main) ([27][0][0][0] / 0x001B), yuv420p, 720x576 [SAR 64:45 DAR 16:9], 25 fps, 25 tbr, 90k tbn, 50 tbc
+
+video="-c:v libx264 $preset $deinterlace"
+
+videof=$(cat $t | grep "Video:")
+videof=$(echo $videof | cut -d ' ' -f 4)
+if [ "$videof" != "mpeg2video" ]
+then
+    echo "Video im falschen Format?"
+    #exit
+    video="-c:v copy"
+fi
+
+#info=$(cat $t | grep "Stream" | grep "Audio")
+grep "Stream" $t | grep "Audio" > $t2
+#cat $t2
+
+# Stream #0:1[0x25a](deu): Audio: mp2 ([3][0][0][0] / 0x0003), 48000 Hz, stereo, s16, 192 kb/s (clean effects)
+# Stream #0:2[0x25b](2ch): Audio: mp2 ([3][0][0][0] / 0x0003), 48000 Hz, stereo, s16, 192 kb/s (clean effects)
+# Stream #0:1[0x1c0]: Audio: mp2, 48000 Hz, stereo, s16, 192 kb/s
+
+map="-map 0:0"
+while read line
+do
+    #echo $line
+    stream1=$(echo $line | cut -d ' ' -f 2 | cut -d ':' -f 2 | cut -d '[' -f 1)
+    stream=$(($stream1-1))
+    codec=$(echo $line | cut -d ' ' -f 4)
+    case "$codec" in
+	"mp2" | "mp2,")
+	    br=128k
+	    for i in $line
+	    do
+	        #echo $i
+	        if [ "$i" == "kb/s" ]
+	        then
+		    break
+	        fi
+	        bra=$i
+	    done
+	    if [ $bra -gt 192 ]
+	    then
+		br=192k
+	    fi
+	    audio="$audio -c:a:$stream $aaclib -b:a:$stream $br"
+	    ;;
+	"ac3" | "ac3," | "aac")
+	    audio="$audio -c:a:$stream copy"
+	    ;;
+    esac
+    #map="$map -map 0:$stream1"
+    map="$map -map 0:a:$stream"
+done < $t2
+audio="$audio -async 1"
+grep "Stream" $t | grep "Subtitle" > $t2
+
+# Stream #0:5[0xe7](deu): Subtitle: dvb_subtitle ([6][0][0][0] / 0x0006) (hearing impaired)
+
+if [ "$subtitel" == "yes" ]
+then
+
+while read line
+do
+    #echo $line
+    #stream1=$(echo $line | cut -d ' ' -f 2 | cut -d ':' -f 2 | cut -d '[' -f 1)
+    #map="$map -map 0:$stream1"
+    map="$map -map 0:s:0"
+    sub="-c:s copy"
+done < $t2
+
+fi
+
+echo $map
+echo $audio
+echo "map:" $map >> $log
+echo "audio:" $audio >> $log
+echo "video:" $video >> $log
+#exit
+
+#gopt="-n"
+#preset="-preset fast"
+#audio="-c:a copy"
+#audio="-c:a:0 libfaac -c:a:1 libfaac -b:a 128k -async 1"
+#map="-map 0:0 -map 0:1 -map 0:2"
+
+if [ "$join" == "yes" ]
+then
+    #flist=/tmp/flist
+    flist=flist
+    rm -f $flist
+    #filesj="-i concat:\""
+fi
+
+service="-metadata service_name=\"$title\""
+
+for r in $w
+do
+    #files="$files -i $r"
+    files="-i $r"
+    ffmpeg $files 2> $t
+    grep "Duration:" $t >> $log
+    if [ "$join" == "yes" ]
+    then
+	if [ -h $r ]
+	then
+	    rr=$(realpath $r)
+	    echo "file '$rr'" >> $flist
+	else
+	    echo "file '$r'" >> $flist
+	fi
+	#filesj="$filesj$r|"
+    else
+	o=$r
+	if [ "$fmt" == "vdr" ]
+	then
+	    o="00"$(basename $r .vdr).ts
+	fi
+	opt="$gopt $files $map $video $audio $sub $test $service ../$dest/$o"
+	echo ffmpeg $opt >> $log
+	nice ffmpeg $opt
+	ffmpeg -i ../$dest/$o 2> $t
+	grep "Duration:" $t >> $log
+    fi
+    done
+
+if [ "$join" == "yes" ]
+then
+    cat $flist >> $log
+    filesj=" -f concat -i $flist"
+    #filesj=${filesj:0:$((${#filesj}-1))}"\""
+    opt="$gopt $filesj $map $video $audio $sub $test ../$dest/00001.ts"
+    echo ffmpeg $opt >> $log
+    nice ffmpeg $opt
+    ffmpeg -i ../$dest/00001.ts 2> $t
+    grep "Duration:" $t >> $log
+fi
+
+
+#ffmpeg -i 0000%d.ts
+#ffmpeg -n -i 00001.ts -c:v libx264 -c:a copy $test ../$dest/00001.ts
+
+cp -p $info ../$dest/info
+if [ "$fmt" == "vdr" ]
+then
+    echo "L 99" >> ../$dest/info
+fi
+
+if [ -e info.txt ]
+then
+    i=$(cat info.txt)
+    echo "$i H264" > ../$dest/info.txt
+else
+    echo H264 > ../$dest/info.txt
+fi
+
+cd ../$dest
+
+vdr=$VDRDIR/vdr
+
+wd=$(pwd)
+$vdr --genindex="$wd"
+
+ffmpeg -i 00001.ts 2>> $log
+
+/usr/bin/touch $videodir/.update
+d=`date +"%F %T"`
+echo "Ende $d" >> $log
+ende=$(date +"%s")
+sek=$(($ende-$start))
+min=$(($sek/60))
+echo "$min Minuten" >> $log
+size2=$(du)
+size2=$(echo $size2 | cut -d ' ' -f 1)
+comp=$(($size1/$size2))
+echo "vorher " $size1  >> $log
+echo "nachher" $size2  >> $log
+echo "Kompression: $comp" >> $log
