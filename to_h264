@@ -8,6 +8,7 @@
 #
 # Video wird nach h264 konvertiert
 # Audio mp2 wird nach aac konvertiert
+#	unter 160 kb/s --> 96 kb/s
 #	bis 192 kb/s --> 128 kb/s
 #	über 192 kb/s --> 192 kb/s
 # AC3 wird kopiert
@@ -22,8 +23,12 @@
 
 #set -x
 
+#mkv=yes		# Matroska Format erzeugen
+#audio_auswahl=yes	# Reihenfolge und Auswahl der Audiospuren
 subtitel=yes
-#join=yes	# concat ffmpeg >= 1.1
+join=yes		# concat ffmpeg >= 1.1, wird bei < 1.1 autom. abgeschaltet
+
+#probesize="-probesize 10000000"	# default 5000000
 
 #preset="-preset fast -tune film -profile:v main -crf 21 -maxrate 2000k -bufsize 1835k"
 preset="-preset fast -tune film -profile:v main -level 4.0 -crf 21 -maxrate 2000k -bufsize 1835k"
@@ -34,12 +39,18 @@ preset="-preset fast -tune film -profile:v main -level 4.0 -crf 21 -maxrate 2000
 #deinterlace="-deinterlace"
 deinterlace="-filter:v yadif"
 
+mp2=aac
+#mp2=copy
+
 #aaclib="libfaac"
 aaclib="libfdk_aac" # Fraunhofer Library
 
-#test="-t 60"
+#test="-t 60" # Sekunden
 #test="-t 1"
+#generate=yes	# for future use
+
 videodir=/video
+gen_name=doit
 
 start=$(date +"%s")
 
@@ -60,6 +71,8 @@ dest=$d1.$d2.$d3
 
 t=/tmp/info
 t2=/tmp/info2
+kennf=/tmp/kennf
+rm -f $kennf
 if [ -e 00001.ts ]
 then
     ffmpeg -i 00001.ts 2> $t
@@ -82,6 +95,23 @@ then
     exit
 fi
 
+if [ "$mkv" == "yes" ]
+then
+    dest="."
+    subtitel=no
+fi
+
+#set -x
+#cat $t
+v=$(grep "ffmpeg version" $t)
+#v=$(ffmpeg -version)
+v=$(echo $v | cut -d \  -f 3)
+if [ "$v" "<" "1.1.0" ]
+then
+    join=no
+fi
+#exit
+#if [ "$generate" == "yes" ]
 mkdir ../$dest
 log="../$dest/logfile"
 d=`date +"%F %T"`
@@ -95,6 +125,10 @@ size1=$(echo $size1 | cut -d ' ' -f 1)
 
 d2=$(dirname $PWD)
 title=$(basename $d2)
+if [ ${title:0:1} == "%" ]
+then
+      title=${title:1}
+fi
 #exit
 
 #info=$(ffmpeg -i 00001.ts | grep "Stream" | grep "Audio")
@@ -123,39 +157,213 @@ grep "Stream" $t | grep "Audio" > $t2
 # Stream #0:2[0x25b](2ch): Audio: mp2 ([3][0][0][0] / 0x0003), 48000 Hz, stereo, s16, 192 kb/s (clean effects)
 # Stream #0:1[0x1c0]: Audio: mp2, 48000 Hz, stereo, s16, 192 kb/s
 
-map="-map 0:0"
+# ffmpeg -i INPUT -metadata:s:a:1 language=eng OUTPUT
+
+declare -a au
+declare -a ac
+declare -a ab
+map="-map 0:v:0"
 while read line
 do
+    #set -x
     #echo $line
     stream1=$(echo $line | cut -d ' ' -f 2 | cut -d ':' -f 2 | cut -d '[' -f 1)
     stream=$(($stream1-1))
     codec=$(echo $line | cut -d ' ' -f 4)
+    codec=${codec//,/}
+    lang=$(echo $line | cut -d ' ' -f 2 | cut -d '(' -f 2 | cut -d ')' -f 1)
+    if [ "${lang:0:1}" == "#" ]
+    then
+	lang=""
+    fi
+    if [ "x" == "xx" ]
+    then
+    f2=$(echo $line | cut -d ' ' -f 2)
+    x1=$(expr index "$f2" "(")
+    if [ "$x1" != "" ]
+    then
+	x2=$(expr index "$f2" ")")
+	lang=${f2:$(($x1+1)):$(($x2-$x1-1))}
+    else
+	lang=""
+    fi
+    fi
+    kenn=$(echo $line | cut -d ' ' -f 2 | cut -d '[' -f 2 | cut -d ']' -f 1)
+    echo "$kenn $stream" >> $kennf
+    #exit
+    br=""
     case "$codec" in
 	"mp2" | "mp2,")
-	    br=128k
-	    for i in $line
-	    do
-	        #echo $i
-	        if [ "$i" == "kb/s" ]
-	        then
-		    break
-	        fi
-	        bra=$i
-	    done
-	    if [ $bra -gt 192 ]
+	    if [ "$mp2" == "aac" ]
 	    then
-		br=192k
+		br=128k
+		for i in $line
+		do
+		    #echo $i
+		    if [ "$i" == "kb/s" ]
+		    then
+			break
+		    fi
+		    bra=$i
+		done
+		if [ $bra -gt 192 ]
+		then
+		    br=192k
+		fi
+		if [ $bra -lt 160 ]
+		then
+		    br=96k
+		fi
+		a="-c:a:$stream $aaclib -b:a:$stream $br"
+		c=$aaclib
+	    else
+		a="-c:a:$stream copy"
+		c=copy
 	    fi
-	    audio="$audio -c:a:$stream $aaclib -b:a:$stream $br"
 	    ;;
 	"ac3" | "ac3," | "aac")
-	    audio="$audio -c:a:$stream copy"
+	    a="-c:a:$stream copy"
+	    c=copy
+	    ;;
+	*)
+	    echo "$codec not valid!"
+	    exit
 	    ;;
     esac
     #map="$map -map 0:$stream1"
     map="$map -map 0:a:$stream"
+    audio="$audio $a"
+#set -x
+    if [ "$lang" != "" ]
+    then
+	if [ "$v" ">" "1.2.0" ]
+	then
+	    l="-metadata:s:a:$stream language=$lang"
+	    audio="$audio $l"
+	    al[$stream]=$l
+	fi
+    fi
+    au[$stream]=$a
+    ac[$stream]=$c
+    ab[$stream]=$br
+    aline[$stream]=$line
 done < $t2
-audio="$audio -async 1"
+
+cat $t
+
+#echo "stream=$stream"
+if [ $stream -gt 0 ]
+then
+
+if [ "$audio_auswahl" == "yes" ]
+then
+
+    echo "map:" $map
+    echo "audio:" $audio
+    #echo "video:" $video
+    echo "Reihenfolge der Audiostreams überprüfen"
+    echo "Änderung z.B. 2,1"
+    echo "n = Abbruch"
+    echo "a = autom."
+    read answer
+    if [ "$answer" == "n" ]
+    then
+	exit
+    fi
+else
+    answer=a
+fi
+    if [ "$answer" == "a" ]
+    then
+	#answer=""
+	audio=""
+	map="-map 0:v:0"
+	sort < $kennf > $t2
+	#cat $t2
+	is=0
+	while read line
+	do
+	    s=$(echo $line | cut -d \  -f 2)
+	    audio="$audio -c:a:$is ${ac[$s]}"
+	    if [ "${ab[$s]}" != "" ]
+	    then
+		audio="$audio -b:a:$is ${ab[$s]}"
+	    fi
+	    lang=${al[$s]}
+	    if [ "$lang" != "" ]
+	    then
+		if [ "$v" ">" "1.2.0" ]
+		then
+		    #l="-metadata:s:a:$is language=$lang"
+		    audio="$audio $lang"
+		fi
+	    fi
+	    map="$map -map 0:a:$(($s))"
+	    is=$(($is+1))
+	done < $t2
+    if [ "$audio_auswahl" == "yes" ]
+    then
+	echo "map:" $map
+	echo "audio:" $audio
+	echo "Reihenfolge der Audiostreams überprüfen"
+	echo "Änderung z.B. 2,1"
+	echo "n = Abbruch"
+	read answer
+	if [ "$answer" == "n" ]
+	then
+	    exit
+	fi
+    else
+	answer=""
+    fi
+    fi
+    if [ "$answer" != "" ]
+    then
+	audio=""
+	map="-map 0:v:0"
+	IFSs=$IFS
+	IFS=,
+	is=0
+	for i in $answer
+	do
+	    #audio="$audio ${au[$i-1]}"
+	    audio="$audio -c:a:$is ${ac[$i-1]}"
+	    if [ "${ab[$i-1]}" != "" ]
+	    then
+		audio="$audio -b:a:$is ${ab[$i-1]}"
+	    fi
+	    lang=${al[$i-1]}
+	    if [ "$lang" != "" ]
+	    then
+		if [ "$v" ">" "1.2.0" ]
+		then
+		    #l="-metadata:s:a:$is language=$lang"
+		    audio="$audio $lang"
+		fi
+	    fi
+	    map="$map -map 0:a:$(($i-1))"
+	    is=$(($is+1))
+	    echo ${aline[$i-1]}
+	done
+	IFS=$IFSs
+	#audio="$audio -copyts"
+	echo "map:" $map
+	echo "audio:" $audio
+	echo "Reihenfolge der Audiostreams überprüfen"
+	echo "n = Abbruch"
+	read answer
+	if [ "$answer" == "n" ]
+	then
+    	    exit
+	fi
+    fi
+
+fi
+
+#audio="$audio -async 1"
+audio="$audio -copyts"
+#exit
+
 grep "Stream" $t | grep "Subtitle" > $t2
 
 # Stream #0:5[0xe7](deu): Subtitle: dvb_subtitle ([6][0][0][0] / 0x0006) (hearing impaired)
@@ -174,14 +382,13 @@ done < $t2
 
 fi
 
-echo $map
-echo $audio
 echo "map:" $map >> $log
 echo "audio:" $audio >> $log
 echo "video:" $video >> $log
 #exit
 
 #gopt="-n"
+gopt="$probesize"
 #preset="-preset fast"
 #audio="-c:a copy"
 #audio="-c:a:0 libfaac -c:a:1 libfaac -b:a 128k -async 1"
@@ -197,12 +404,23 @@ fi
 
 service="-metadata service_name=\"$title\""
 
+ges=0
+
 for r in $w
 do
     #files="$files -i $r"
     files="-i $r"
     ffmpeg $files 2> $t
-    grep "Duration:" $t >> $log
+    # Duration: 00:17:26.08, start: 1.400000, bitrate: 1253 kb/s
+    #set -x
+    dur=$(grep "Duration:" $t)
+    echo $dur >> $log
+    dur2=$(echo $dur | cut -d ' ' -f2)
+    dur2=$(echo $dur2 | cut -d '.' -f1)
+    dur3=$(date +"%s" -d $dur2)
+    b=$(date +"%s" -d "00:00:00")
+    dur=$(($dur3-$b))
+    ges=$(($ges+$dur))
     if [ "$join" == "yes" ]
     then
 	if [ -h $r ]
@@ -219,6 +437,11 @@ do
 	then
 	    o="00"$(basename $r .vdr).ts
 	fi
+	if [ "$mkv" == "yes" ]
+	then
+	    #o=$title-$(basename $r .vdr).mkv
+	    o=$title-$(echo $r | cut -d '.' -f 1).mkv
+	fi
 	opt="$gopt $files $map $video $audio $sub $test $service ../$dest/$o"
 	echo ffmpeg $opt >> $log
 	nice ffmpeg $opt
@@ -229,19 +452,32 @@ do
 
 if [ "$join" == "yes" ]
 then
+    h=$(($ges/3600))
+    m=$(($ges/60-$h*60))
+    s=$(($ges-$m*60-$h*3600))
+    echo "Dauer $h:$m:$s" >> $log
+    #echo $(($ges / 60)) "Minuten Dauer" >> $log
     cat $flist >> $log
     filesj=" -f concat -i $flist"
     #filesj=${filesj:0:$((${#filesj}-1))}"\""
-    opt="$gopt $filesj $map $video $audio $sub $test ../$dest/00001.ts"
+    ofile="../$dest/00001.ts"
+    if [ "$mkv" == "yes" ]
+    then
+	ofile="../$title.mkv"
+    fi
+    opt="$gopt $filesj $map $video $audio $sub $test $service $ofile"
     echo ffmpeg $opt >> $log
     nice ffmpeg $opt
-    ffmpeg -i ../$dest/00001.ts 2> $t
+    ffmpeg -i $ofile 2> $t
     grep "Duration:" $t >> $log
 fi
 
 
 #ffmpeg -i 0000%d.ts
 #ffmpeg -n -i 00001.ts -c:v libx264 -c:a copy $test ../$dest/00001.ts
+
+if [ "$mkv" != "yes" ]
+then
 
 cp -p $info ../$dest/info
 if [ "$fmt" == "vdr" ]
@@ -267,6 +503,9 @@ $vdr --genindex="$wd"
 ffmpeg -i 00001.ts 2>> $log
 
 /usr/bin/touch $videodir/.update
+
+fi
+
 d=`date +"%F %T"`
 echo "Ende $d" >> $log
 ende=$(date +"%s")
