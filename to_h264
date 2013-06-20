@@ -35,6 +35,8 @@ preset="-preset fast -tune film -profile:v main -level 4.0 -crf 21 -maxrate 2000
 #preset="-preset medium -tune film -profile:v main -crf 21"
 #preset="-preset medium -tune grain -profile:v main -crf 21"
 #preset="-preset veryslow -qp 0"
+gop="-g 50"<---># verbessert die Navigation, default 250
+preset="$preset $gop"
 
 #deinterlace="-deinterlace"
 deinterlace="-filter:v yadif"
