@@ -1,7 +1,29 @@
 #!/bin/bash
 
 # to_h264						jsffm@web.de
-#
+
+aac_br_select=1		# 1 = 96,128,192  2 = 72,96,128
+
+stop=yes		# Bestätigung bei wichtigen Meldungen
+#mkv=yes		# Matroska Format erzeugen
+#audio_auswahl=yes	# Reihenfolge und Auswahl der Audiospuren
+join=yes		# concat ffmpeg >= 1.1, wird bei < 1.1 autom. abgeschaltet
+join2=yes		# concat für ffmpeg < 1.1 mittels cat, 
+			# bei ffmpeg >= 1.1 wird autom. builtin benutzt
+			# funktioniert bei neueren TS-Files
+#join3=yes		# projectx	for fixing problems
+			# empfehlenswert bei .vdr 
+			# sehr empfehlenswert bei .vdr > 1 Datei und > 1 Audiospur
+#demux_x264=yes		# nach demux mit x264 wandeln
+#demux_aac=yes		# nach demux in aac wandeln
+			# wenn beide an sind wird 00001.ts direkt mit tsmuxer erzeugt
+			# von Vorteil bei problemat. ffmpeg Versionen
+
+#scale="-vf scale=720x576:interl=1"	# HD --> SD
+
+crf=21		# Qualität, default 23, kleiner ist besser
+gop="-g 50"	# verbessert die Navigation, default 250
+
 # Funktioniert mit .vdr und .ts
 #
 # Ziel wird in .rec Ordner + 1 min gespeichert
@@ -20,39 +42,88 @@
 # info.vdr wird ergänzt mit "L 99"
 #
 # Softhddevice spielt das Ergebnis klaglos ab
+#
+#	Unbedingt die Filmlänge überprüfen!
+#
+#	.vdr > 1 Datei und > 1 Audiospur mit procetx vorbehandeln
+#
+#	ToDo
+#
+#	join2: ältere VDR-Version erkennen
+#
+#	info-Datei anpassen http://www.vdr-wiki.de/wiki/index.php/Info
 
 #set -x
 
-#mkv=yes		# Matroska Format erzeugen
-#audio_auswahl=yes	# Reihenfolge und Auswahl der Audiospuren
+
 subtitel=yes
-join=yes		# concat ffmpeg >= 1.1, wird bei < 1.1 autom. abgeschaltet
+join3d=yes		# projectx demux, sollte an sein
+#join2m=yes		# cat mpeg	for testing only
+#join2p=yes		# cat mpeg+pipe	for testing only
 
 #probesize="-probesize 10000000"	# default 5000000
 
+
 #preset="-preset fast -tune film -profile:v main -crf 21 -maxrate 2000k -bufsize 1835k"
-preset="-preset fast -tune film -profile:v main -level 4.0 -crf 21 -maxrate 2000k -bufsize 1835k"
+#preset="-preset fast -tune film -profile:v main -level 4.0 -crf 21 -maxrate 2000k -bufsize 1835k"
 #preset="-preset medium -tune film -profile:v main -crf 21"
 #preset="-preset medium -tune grain -profile:v main -crf 21"
 #preset="-preset veryslow -qp 0"
-gop="-g 50"<---># verbessert die Navigation, default 250
-preset="$preset $gop"
 
 #deinterlace="-deinterlace"
 deinterlace="-filter:v yadif"
+#preset="$preset $gop"
 
 mp2=aac
 #mp2=copy
 
 #aaclib="libfaac"
-aaclib="libfdk_aac" # Fraunhofer Library
+aaclib="libfdk_aac" # Fraunhofer Library - bessere Qualität
 
 #test="-t 60" # Sekunden
+#test="-t 300" # Sekunden
 #test="-t 1"
-#generate=yes	# for future use
 
+temp=temp
+#temp=/tmp/h264
+#temp=/disk3/h264
+#temp=/home/h264
 videodir=/video
-gen_name=doit
+vdr=$VDRDIR/vdr
+
+#join4=yes		# mplayer not working
+#generate=yes	# for future use
+#gen_name=doit
+
+case $aac_br_select in
+    1)
+	aac_br1=96		# mp2 < 160
+	aac_br2=128		# mp2
+	aac_br3=192		# mp2 > 192
+	;;
+    2)
+	aac_br1=72		# mp2 < 160
+	aac_br2=96		# mp2
+	aac_br3=128		# mp2 > 192
+	;;
+esac
+
+echo mkv=$mkv
+echo audio_auswahl=$audio_auswahl
+echo subtitel=$subtitel
+echo join=$join
+echo join2=$join2
+echo join3=$join3
+echo join3d=$join3d
+echo demux_x264=$demux_x264
+echo demux_aac=$demux_aac
+echo aac_br_select=$aac_br_select $aac_br1,$aac_br2,$aac_br3
+echo scale=$scale
+echo "press Enter"
+if [ "$stop" == "yes" ]
+then
+    read answer
+fi
 
 start=$(date +"%s")
 
@@ -75,16 +146,22 @@ t=/tmp/info
 t2=/tmp/info2
 kennf=/tmp/kennf
 rm -f $kennf
+auswahl_hilfe=/tmp/auswahl_hilfe
+rm -f $auswahl_hilfe
+touch $auswahl_hilfe
 if [ -e 00001.ts ]
 then
-    ffmpeg -i 00001.ts 2> $t
+    infile=00001.ts
+    ffmpeg -i $infile 2> $t
     fmt=ts
     w="*.ts"
     info=info
 fi
 if [ -e 001.vdr ]
 then
-    ffmpeg -i 001.vdr 2> $t
+    infile=001.vdr
+    #form="-f mpeg"
+    ffmpeg $form -i $infile 2> $t
     fmt=vdr
     w="0*.vdr"
     info=info.vdr
@@ -95,6 +172,40 @@ if [ "$fmt" == "" ]
 then
     echo "Falsche Directory?"
     exit
+fi
+
+while read line
+do
+    if [ "${line:0:1}" == "E" ]
+    then
+	rec_start_s=$(echo $line | cut -d \  -f 3)
+    fi
+done < $info
+#s2=$(($rec_start_s+60))
+#d=$(date +%F.%H.%M -d @$s2)
+#dest=$d."1-0.rec"
+#exit
+
+for r in $w
+do
+    infiles="$infiles $r"
+done
+nfiles=$(echo $infiles | wc -w)
+if [ $nfiles -eq 1 ]
+then
+    join=no
+    join2=no
+fi
+if [ "$join3d" == "yesx" ]
+then
+    join=no
+    join2=no
+    join3=yes
+fi
+if [ "$join3" == "yes" ]
+then
+    join=no
+    join2=no
 fi
 
 if [ "$mkv" == "yes" ]
@@ -111,6 +222,28 @@ v=$(echo $v | cut -d \  -f 3)
 if [ "$v" "<" "1.1.0" ]
 then
     join=no
+else
+    if [ "$join" == "yes" ]
+    then
+	join2=no
+    fi
+fi
+if [ "$join2" == "yes" ]
+then
+    if [ "$fmt" == "vdr" ]
+    then
+	filej2=filej2.vdr
+    fi
+    if [ "$fmt" == "ts" ]
+    then
+	filej2=filej2.ts
+    fi
+    join=no
+    if [ "$join2m" == "yes" ]
+    then
+	subtitel=no
+    fi
+    rm -f $filej2
 fi
 #exit
 #if [ "$generate" == "yes" ]
@@ -121,6 +254,20 @@ echo "Start $d" > $log
 echo $PWD >> $log
 echo $PWD >> /tmp/h264_current
 echo $d $PWD >> /var/log/h264
+echo "mkv=$mkv" >> $log
+echo "audio_auswahl=$audio_auswahl" >> $log
+echo "subtitel=$subtitel" >> $log
+echo "join=$join" >> $log
+echo "join2=$join2" >> $log
+if [ "$join3" != "" ]
+then
+    echo "join3=$join3" >> $log
+    echo demux_x264=$demux_x264 >> $log
+    echo demux_aac=$demux_aac >> $log
+fi
+echo aac_br_select=$aac_br_select $aac_br1,$aac_br2,$aac_br3 >> $log
+echo "scale=$scale" >> $log
+#echo "preset=$preset" >> $log
 ls -lLk >> $log
 size1=$(du -L)
 size1=$(echo $size1 | cut -d ' ' -f 1)
@@ -137,19 +284,60 @@ fi
 #cp $t $log
 cat $t >> $log
 
-# Stream #0:0[0xad]: Video: mpeg2video (Main) ([2][0][0][0] / 0x0002), yuv420p, 720x576 [SAR 16:15 DAR 4:3], 15000 kb/s, 25 fps, 25 tbr, 90k tbn, 50 tbc
-# Stream #0:0[0x100]: Video: h264 (Main) ([27][0][0][0] / 0x001B), yuv420p, 720x576 [SAR 64:45 DAR 16:9], 25 fps, 25 tbr, 90k tbn, 50 tbc
-
-video="-c:v libx264 $preset $deinterlace"
-
-videof=$(cat $t | grep "Video:")
-videof=$(echo $videof | cut -d ' ' -f 4)
-if [ "$videof" != "mpeg2video" ]
+if [ "$fmt" == "vdr" ]
 then
-    echo "Video im falschen Format?"
-    #exit
-    video="-c:v copy"
+    for r in $w
+    do
+	echo $r >> $log
+	ffmpeg -i $r 2> $t
+	grep "Stream" $t >> $log
+    done
+    cat $log
+    echo "p = projectx"
+    echo -e "press Enter"
+    if [ "$stop" == "yes" ]
+    then
+	read answer
+    if [ "$answer" == "p" ]
+    then
+	join3=yes
+	join=no
+	join2=no
+    fi
+    fi
 fi
+
+aac_br() {
+    br=$aac_br2
+    if [ $1 -gt 192 ]
+    then
+	br=$aac_br3
+    fi
+    if [ $1 -lt 160 ]
+    then
+	br=$aac_br1
+    fi
+}
+
+file_check() {
+
+
+ffmpeg -i $1 2> $t
+
+dur=$(grep "Duration:" $t)
+#echo $dur
+for i in $dur
+    do
+        #echo $i
+        if [ "$i" == "kb/s" ]
+        then
+        break
+    fi
+    brv=$i
+done
+#echo $brv
+#exit
+
 
 #info=$(cat $t | grep "Stream" | grep "Audio")
 grep "Stream" $t | grep "Audio" > $t2
@@ -165,6 +353,9 @@ declare -a au
 declare -a ac
 declare -a ab
 map="-map 0:v:0"
+audio=""
+rm -f $kennf
+bras=0
 while read line
 do
     #set -x
@@ -173,23 +364,32 @@ do
     stream=$(($stream1-1))
     codec=$(echo $line | cut -d ' ' -f 4)
     codec=${codec//,/}
-    lang=$(echo $line | cut -d ' ' -f 2 | cut -d '(' -f 2 | cut -d ')' -f 1)
+    lang=$(echo $line | cut -d ' ' -f 2 | cut -d \( -f 2 | cut -d \) -f 1)
     if [ "${lang:0:1}" == "#" ]
     then
 	lang=""
     fi
-    if [ "x" == "xx" ]
-    then
-    f2=$(echo $line | cut -d ' ' -f 2)
-    x1=$(expr index "$f2" "(")
-    if [ "$x1" != "" ]
-    then
-	x2=$(expr index "$f2" ")")
-	lang=${f2:$(($x1+1)):$(($x2-$x1-1))}
-    else
-	lang=""
-    fi
-    fi
+    for i in $line
+    do
+	#echo $i
+	if [ "$i" == "kb/s" ]
+	then
+	    break
+	fi
+	bra=$i
+    done
+    #if [ "x" == "xx" ]
+    #then
+    #f2=$(echo $line | cut -d ' ' -f 2)
+    #x1=$(expr index "$f2" "(")
+    #if [ "$x1" != "" ]
+    #then
+	#x2=$(expr index "$f2" ")")
+	#lang=${f2:$(($x1+1)):$(($x2-$x1-1))}
+    #else
+	#lang=""
+    #fi
+    #fi
     kenn=$(echo $line | cut -d ' ' -f 2 | cut -d '[' -f 2 | cut -d ']' -f 1)
     echo "$kenn $stream" >> $kennf
     #exit
@@ -198,25 +398,17 @@ do
 	"mp2" | "mp2,")
 	    if [ "$mp2" == "aac" ]
 	    then
-		br=128k
-		for i in $line
-		do
-		    #echo $i
-		    if [ "$i" == "kb/s" ]
-		    then
-			break
-		    fi
-		    bra=$i
-		done
-		if [ $bra -gt 192 ]
-		then
-		    br=192k
-		fi
-		if [ $bra -lt 160 ]
-		then
-		    br=96k
-		fi
-		a="-c:a:$stream $aaclib -b:a:$stream $br"
+		#br=128k
+		#if [ $bra -gt 192 ]
+		#then
+		#    br=192k
+		#fi
+		#if [ $bra -lt 160 ]
+		#then
+		#    br=96k
+		#fi
+		aac_br $bra
+		a="-c:a:$stream $aaclib -b:a:$stream "$br"k"
 		c=$aaclib
 	    else
 		a="-c:a:$stream copy"
@@ -247,11 +439,46 @@ do
     fi
     au[$stream]=$a
     ac[$stream]=$c
-    ab[$stream]=$br
+    if [ "$br" != "" ]
+    then
+	ab[$stream]=$br"k"
+    fi
     aline[$stream]=$line
+    bras=$(($bras+$bra))
 done < $t2
+#exit
+brv=$(($brv-$bras))
+echo "Videobitrate: $brv" >> $log
+br=$(($brv/2))
+if [ $br -gt 2000 ]
+then
+    br=2000
+fi
+preset="-preset fast -tune film -profile:v main -level 4.0 -crf $crf -maxrate "$br"k -bufsize 1835k"
+preset="$preset $gop"
+echo "preset=$preset" >> $log
 
-cat $t
+# Stream #0:0[0xad]: Video: mpeg2video (Main) ([2][0][0][0] / 0x0002), yuv420p, 720x576 [SAR 16:15 DAR 4:3], 15000 kb/s, 25 fps, 25 tbr, 90k tbn, 50 tbc
+# Stream #0:0[0x100]: Video: h264 (Main) ([27][0][0][0] / 0x001B), yuv420p, 720x576 [SAR 64:45 DAR 16:9], 25 fps, 25 tbr, 90k tbn, 50 tbc
+
+video="-c:v libx264 $preset $deinterlace $scale"
+
+videof=$(cat $t | grep "Video:")
+videof=$(echo $videof | cut -d ' ' -f 4)
+
+if [ "$scale" == "" ]
+then
+
+if [ "$videof" != "mpeg2video" ]
+then
+    echo "Video schon in h264?"
+    #exit
+    video="-c:v copy"
+fi
+
+fi
+
+#cat $t
 
 #echo "stream=$stream"
 if [ $stream -gt 0 ]
@@ -259,7 +486,8 @@ then
 
 if [ "$audio_auswahl" == "yes" ]
 then
-
+    cat $t
+    cat $auswahl_hilfe
     echo "map:" $map
     echo "audio:" $audio
     #echo "video:" $video
@@ -302,6 +530,7 @@ fi
 	    fi
 	    map="$map -map 0:a:$(($s))"
 	    is=$(($is+1))
+	    echo ${aline[$s]}
 	done < $t2
     if [ "$audio_auswahl" == "yes" ]
     then
@@ -387,14 +616,22 @@ fi
 echo "map:" $map >> $log
 echo "audio:" $audio >> $log
 echo "video:" $video >> $log
+
+service="-metadata service_name=\"$title\""
+ffopt="$map $video $audio $sub $test $service"
+
+}
+
+if [ "$join3" != "yes" ]
+then
+    file_check $infile
+fi
+
 #exit
 
 #gopt="-n"
 gopt="$probesize"
-#preset="-preset fast"
-#audio="-c:a copy"
-#audio="-c:a:0 libfaac -c:a:1 libfaac -b:a 128k -async 1"
-#map="-map 0:0 -map 0:1 -map 0:2"
+#gopt="$gopt -report"
 
 if [ "$join" == "yes" ]
 then
@@ -404,7 +641,6 @@ then
     #filesj="-i concat:\""
 fi
 
-service="-metadata service_name=\"$title\""
 
 ges=0
 
@@ -412,7 +648,7 @@ for r in $w
 do
     #files="$files -i $r"
     files="-i $r"
-    ffmpeg $files 2> $t
+    ffmpeg $form $files 2> $t
     # Duration: 00:17:26.08, start: 1.400000, bitrate: 1253 kb/s
     #set -x
     dur=$(grep "Duration:" $t)
@@ -434,6 +670,43 @@ do
 	fi
 	#filesj="$filesj$r|"
     else
+	if [ "$join2" == "yes" ]
+	then
+	    #nice cat $r >> $filej2
+	    if [ "$fmt" == "vdr" ]
+	    then
+		filesj2="$filesj2 $r"
+	    fi
+	    if [ "$fmt" == "ts" ]
+	    then
+		if [ "$join2m" == "yes" ]
+		then
+		    if [ "$join2p" == "yes" ]
+		    then
+			filesj2="$filesj2 $r"
+		    else
+			f2=../${r:0:5}".mpg"
+			#ffmpeg -i $r -map 0 -c copy $sub $f2
+			#ffmpeg -i $r -map 0 -c copy -copyts $f2
+			#ffmpeg -i $r -map 0 -c copy $f2
+			ffmpeg -i $r -map 0 -c copy -async 1 $f2
+			filesj2="$filesj2 $f2"
+		    fi
+		    #form="-f mpeg"
+		else
+		    filesj2="$filesj2 $r"
+		    form="-f mpegts"
+		fi
+	    fi
+	else
+	if [ "$join3" == "yes" ]
+	then
+	    filesj3="$filesj3 $r"
+	else
+	if [ "$join4" == "yes" ]
+	then
+	    filesj4="$filesj4 $r"
+	else
 	o=$r
 	if [ "$fmt" == "vdr" ]
 	then
@@ -444,11 +717,14 @@ do
 	    #o=$title-$(basename $r .vdr).mkv
 	    o=$title-$(echo $r | cut -d '.' -f 1).mkv
 	fi
-	opt="$gopt $files $map $video $audio $sub $test $service ../$dest/$o"
+	opt="$gopt $form $files $ffopt ../$dest/$o"
 	echo ffmpeg $opt >> $log
 	nice ffmpeg $opt
 	ffmpeg -i ../$dest/$o 2> $t
 	grep "Duration:" $t >> $log
+	fi
+	fi
+	fi
     fi
     done
 
@@ -467,13 +743,344 @@ then
     then
 	ofile="../$title.mkv"
     fi
-    opt="$gopt $filesj $map $video $audio $sub $test $service $ofile"
+    opt="$gopt $form $filesj $ffopt $ofile"
     echo ffmpeg $opt >> $log
     nice ffmpeg $opt
     ffmpeg -i $ofile 2> $t
     grep "Duration:" $t >> $log
 fi
-
+if [ "$join2" == "yes" ]
+then
+    h=$(($ges/3600))
+    m=$(($ges/60-$h*60))
+    s=$(($ges-$m*60-$h*3600))
+    echo "Dauer $h:$m:$s" >> $log
+    #nice cat $filesj2 > $filej2
+    #filej22=filej2.mpg
+    #mencoder -of mpeg -forceidx -oac copy -ovc copy "$filej2" -o "$filej22"
+    #ffmpeg -i $filej2 2>> $log
+    ofile="../$dest/00001.ts"
+    if [ "$mkv" == "yes" ]
+    then
+	ofile="../$title.mkv"
+    fi
+    #opt="$gopt -i $filej2 $ffopt $ofile"
+    opt="$gopt $form -i - $ffopt $ofile"
+    echo ffmpeg $opt >> $log
+    #nice ffmpeg $opt
+    if [ "$join2p" == "yes" ]
+    then
+	for i in $filesj2
+	do
+	    o=/run/${i:0:5}.mpg
+	    rm -f $o
+	    mkfifo $o
+	    #exec="$exec ffmpeg -i $i -map 0 -c copy -copyts $o &"
+	    #ffmpeg -i $i -map 0 -c copy -copyts -y $o &
+	    #ffmpeg -i $i -map 0 -c copy -y $o 2> /dev/null &
+	    ffmpeg $form -i $i -map 0 -c copy -async 1 -y $o 2> /dev/null &
+	    filesj22="$filesj22 $o"
+	done
+	cat $filesj22 | nice ffmpeg $opt
+	killall ffmpeg
+    else
+	cat $filesj2 | nice ffmpeg $opt
+	#rm -f $filej2
+	#rm -f $filej22
+	if [ "$fmt" == "ts" ]
+	then
+	    if [ "$join2m" == "yes" ]
+	    then
+		rm -i $filesj2
+	    fi
+	fi
+    fi
+    ffmpeg -i $ofile 2> $t
+    grep "Duration:" $t >> $log
+fi
+if [ "$join3" == "yes" ]
+then
+    h=$(($ges/3600))
+    m=$(($ges/60-$h*60))
+    s=$(($ges-$m*60-$h*3600))
+    echo "Dauer $h:$m:$s" >> $log
+    ofile="../$dest/00001.ts"
+    if [ "$mkv" == "yes" ]
+    then
+	ofile="../$title.mkv"
+    fi
+    mkdir $temp
+    if [ "$join3d" == "yes" ]
+    then
+	nice projectx -demux -out $temp $filesj3
+	plog=$(ls $temp/*.txt)
+	cat $plog >> $log
+	echo .
+	ls -l $temp >> $log
+	#set -x
+	case $fmt in
+	    "ts")
+		n="00001"
+		;;
+	    "vdr")
+		n="001"
+		;;
+	esac
+	declare -a mp2name
+	mp2name[0]=$n".mp2"
+	mp2name[1]=$n"-02.mp2"
+	mp2name[2]=$n"-03.mp2"
+	mp2name[3]=$n"-04.mp2"
+	declare -a langa
+	grep "PID:" $plog > $t2
+	im=0
+	while read line
+	do
+	    echo $line
+	    kenn=$(echo $line | cut -d ' ' -f 2 | cut -d '{' -f 1)
+	    lang=$(echo $line | cut -d '{' -f 2 | cut -d '}' -f 1)
+	    typ=$(echo $line | cut -d \( -f 2 | cut -d \) -f 1)
+	    if [ "$typ" == "Mpg1" ]
+	    then
+		langa[$kenn]=$lang
+		#mv $temp/${mp2name[$im]} $temp/$kenn-$lang.mp2
+		#im=$(($im+1))
+	    fi
+	    if [ "$typ" == "AC-3" ]
+	    then
+		kenn=$(echo $line | cut -d ' ' -f 2 | cut -d '(' -f 1)
+		langa[$kenn]=$lang
+		#mv $temp/00001.ac3 $temp/$kenn-$lang.ac3
+	    fi
+	done < $t2
+	#grep "\"ok> PID\"" $plog > $t2
+	grep "ok> PID" $plog > $t2
+	#grep "has PES-ID" $plog > $t2
+	im=0
+	while read line
+	do
+	    echo $line
+	    kenn=$(echo $line | cut -d ' ' -f 3)
+	    typ=$(echo $line | cut -d ' ' -f 7-8)
+	    if [ "$typ" == "(MPEG Audio)" ]
+	    then
+		lang=${langa[$kenn]}
+		mv $temp/${mp2name[$im]} $temp/$kenn-$lang.mp2
+		im=$(($im+1))
+	    fi
+	    if [ "$typ" == "(private stream" ]
+	    then
+		lang=${langa[$kenn]}
+		mv $temp/$n.ac3 $temp/$kenn-$lang.ac3
+		#im=$(($im+1))
+	    fi
+	done < $t2
+	grep "found PES-ID" $plog > $t2
+	# -> found PES-ID 0xC0 (MPEG Audio) @ 81845
+	im=0
+	while read line
+	do
+	    echo $line
+	    kenn=$(echo $line | cut -d ' ' -f 4)
+	    typ=$(echo $line | cut -d ' ' -f 5-6)
+	    if [ "$typ" == "(MPEG Audio)" ]
+	    then
+		langa[$kenn]=deu
+		mv $temp/${mp2name[$im]} $temp/$kenn-deu.mp2
+		im=$(($im+1))
+	    fi
+	    if [ "$typ" == "(private stream" ]
+	    then
+		langa[$kenn]=deu
+		mv $temp/$n.ac3 $temp/$kenn-deu.ac3
+	    fi
+	done < $t2
+	ls -l $temp >> $log
+	#exit
+	meta=$temp/vdr.meta
+	#rm -f $meta
+	#set -x
+	echo "MUXOPT --no-pcr-on-video-pid --new-audio-pes --vbr  --vbv-len=500" > $meta
+	map="-map 0:v:0"
+	fmp2=$(ls $temp/*.mp2)
+	f2mp2=""
+	is=1
+	#set -x
+	rm -f $t2
+	for i in $fmp2
+	do
+	    f2mp2="$f2mp2 -i $i"
+	    map="$map -map $is:a:0"
+	    is=$(($is+1))
+	    lang=$(echo $i | cut -d '-' -f 2 | cut -d '.' -f 1)
+	    if [ "$demux_aac" == "yes" ]
+	    then
+		# 001.mp2: MPEG ADTS, layer II, v1, 192 kbps, 48 kHz, Stereo
+		l=$(file $i)
+		bra=$(echo $l | cut -d \  -f 7)
+		aac_br $bra
+		#echo $br
+		out=${i%.*}.aac
+		#neroAacEnc -cbr 128 -if $i -of $out
+		ffmp2opt="-i $i -c:a:0 $aaclib -b:a:0 $br"k" -copyts $out"
+		echo ffmpeg $ffmp2opt >> $log
+		nice ffmpeg $ffmp2opt &
+		FPID="$FPID $!"
+		echo "A_AAC, \"$out\", lang=$lang" >> $t2
+	    else
+		echo "A_MP3, \"$i\", lang=$lang" >> $t2
+	    fi
+	done
+	fv=$(ls $temp/*.m2v)
+	if [ "$demux_x264" == "yes" ]
+	then
+	    out=$temp/001.264
+	    #deinterlace="-vf yadif"
+	    deinterlace="--tff"
+	    opt="--preset fast --tune film --profile main --level 4.0 --crf $crf --vbv-bufsize 1835 --vbv-maxrate 2000 $deinterlace -I 50"
+	    echo "x264: $opt" >> $log
+	    x264 $opt -o $out $fv
+	    #exit
+	    echo "V_MPEG4/ISO/AVC, \"$out\", fps=25, insertSEI, contSPS" >> $meta
+	else
+	    echo "V_MPEG-2, \"$fv\", fps=25" >> $meta
+	fi
+	if [ "$FPID" != "" ]
+	then
+	    wait $FPID
+	fi
+	cat $t2 >> $meta
+	#exit
+	fac3=$(ls $temp/*.ac3)
+	f2ac3=""
+	for i in $fac3
+	do
+	    f2ac3="$f2ac3 -i $i"
+	    lang=$(echo $i | cut -d '-' -f 2 | cut -d '.' -f 1)
+	    map="$map -map $is:a:0"
+	    is=$(($is+1))
+	    echo "A_AC3, \"$i\", lang=$lang" >> $meta
+	done
+	if [ "$demux_x264" == "yes" -a "$demux_aac" == "yes" ]
+	then
+	    direct=yes
+	fi
+	if [ "$direct" == "yes" ]
+	then
+	    file=../$dest/00001.ts
+	else
+	    file=$temp/temp.ts
+	    #mkfifo $file
+	fi
+	tsmuxer=yes
+	if [ "$tsmuxer" == "yes" ]
+	then
+	    #cat $meta >> $log
+	    nice tsMuxeR $meta $file
+	    cat $meta >> $auswahl_hilfe
+	else
+	    files="-i $fv $f2mp2 $f2ac3"
+	    #ffopt="-map 0 -c copy -fflags +genpts"
+	    #map="-map 0:v:0 -map 0:a:0"
+	    ffopt="$map -c copy"
+	    # Ticket #1598 (open defect)
+	    ffmpeg $files $ffopt $file
+	fi
+	rm -f $temp/*.m2v
+	rm -f $temp/*.264
+	rm -f $temp/*.mp2
+	rm -f $temp/*.ac3
+	rm -f $temp/*.aac
+	ffmpeg -i $file 2>> $log
+	#grep "-> found" $plog >> $auswahl_hilfe
+	#grep " found" $plog >> $auswahl_hilfe
+	grep "PES-ID" $plog >> $auswahl_hilfe
+	grep "PID:" $plog >> $auswahl_hilfe
+	cat $auswahl_hilfe >> $log
+	#exit
+	if [ "$direct" == "yes" ]
+	then
+	    opt="$gopt -i $file"
+	else
+	    file_check $file
+	    opt="$gopt -i $file $ffopt $ofile"
+	fi
+	#exit
+    else
+    #to=vdr
+    #to=ts
+    to=m2p
+    to2=$to
+    if [ "$to" == "m2p" ]
+    then
+	to2=mpg
+    fi
+    case $fmt in
+	"vdr")
+	    pfile="$temp/001[pes][remux].$to2"
+	    plog="$temp/001_log.txt"
+	;;
+	"ts")
+	    pfile="$temp/00001[remux].$to2"
+	    plog="$temp/00001_log.txt"
+	;;
+    esac
+    #mkfifo $pfile
+    #nice projectx -tots -out temp $filesj3
+    #nice projectx -to$to -out temp $filesj3 & > /dev/null
+    #projectx -to$to -out temp $filesj3 &
+    nice projectx -to$to -out $temp $filesj3
+    #exit
+    cat $plog >> $log
+    ffmpeg -i $pfile 2>> $log
+    file_check $pfile
+    #exit
+    #opt="$gopt -i $file $ffopt $ofile"
+    #if [ "$to" == "vdr" ]
+    #then
+	#form="-f mpeg"
+    #fi
+    opt="$gopt $form -i $pfile $ffopt $ofile"
+    fi
+    echo ffmpeg $opt >> $log
+    nice ffmpeg $opt
+    rm -f $temp/temp.ts
+    #ffmpeg -i $ofile 2> $t
+    #grep "Duration:" $t >> $log
+fi
+if [ "$join4" == "yes" ]
+then
+    h=$(($ges/3600))
+    m=$(($ges/60-$h*60))
+    s=$(($ges-$m*60-$h*3600))
+    echo "Dauer $h:$m:$s" >> $log
+    ofile="../$dest/00001.ts"
+    if [ "$mkv" == "yes" ]
+    then
+	ofile="../$title.mkv"
+    fi
+    #mkdir temp
+    #nice mplayer -dumpstream $filesj4
+    nice mplayer -dumpstream 0000*.ts
+    exit
+    if [ "$fmt" == "vdr" ]
+    then
+	file="$temp/001[pes][remux].ts"
+	cat $temp/001_log.txt >> $log
+    fi
+    if [ "$fmt" == "ts" ]
+    then
+	file="$temp/00001[remux].ts"
+	cat $temp/00001_log.txt >> $log
+    fi
+    ffmpeg -i $file 2>> $log
+    #exit
+    opt="$gopt -i $file $ffopt $ofile"
+    echo ffmpeg $opt >> $log
+    nice ffmpeg $opt
+    ffmpeg -i $ofile 2> $t
+    grep "Duration:" $t >> $log
+fi
 
 #ffmpeg -i 0000%d.ts
 #ffmpeg -n -i 00001.ts -c:v libx264 -c:a copy $test ../$dest/00001.ts
@@ -495,14 +1102,21 @@ else
     echo H264 > ../$dest/info.txt
 fi
 
-cd ../$dest
+if [ -e logfile ]
+then
+    cp -p logfile ../$dest/logfile1
+fi
 
-vdr=$VDRDIR/vdr
+#set -x
+#cd ../$dest
+
 
 wd=$(pwd)
-$vdr --genindex="$wd"
+#$vdr --genindex="$wd"
+$vdr --genindex="../$dest"
 
-ffmpeg -i 00001.ts 2>> $log
+#ffmpeg -i 00001.ts 2>> $log
+ffmpeg -i ../$dest/00001.ts 2>> $log
 
 /usr/bin/touch $videodir/.update
 
@@ -514,9 +1128,10 @@ ende=$(date +"%s")
 sek=$(($ende-$start))
 min=$(($sek/60))
 echo "$min Minuten" >> $log
-size2=$(du)
+#size2=$(du)
+size2=$(du ../$dest)
 size2=$(echo $size2 | cut -d ' ' -f 1)
-comp=$(($size1/$size2))
+comp=$(($size1*100/$size2))
 echo "vorher " $size1  >> $log
 echo "nachher" $size2  >> $log
-echo "Kompression: $comp" >> $log
+echo "Kompression: $comp %" >> $log
