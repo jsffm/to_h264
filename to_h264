@@ -26,6 +26,7 @@ join=concat		# avconv + ffmpeg >= 1.0
 mux=ffmpeg		# works fine
 
 #scale="-vf scale=720:576:interl=1"	# HD --> SD
+#aspect="-aspect 4:3"
 
 crf=21		# Qualität, default 23, kleiner ist besser
 gop="-g 50"	# verbessert die Navigation, default 250
@@ -78,11 +79,14 @@ projectxd=yes		# projectx demux, sollte an sein
 
 #deinterlace="-deinterlace"
 deinterlace="-filter:v yadif"
+#deinterlace="-filter:v yadif=1:0"
+#deinterlace="-ilme"
 #preset="$preset $gop"
 
 mp2=aac
 #mp2=copy
 #mp2_256=ac3	# mp2 mit 256k in ac3 192k
+#ac3_stereo=aac	# ac3 stereo in aac 192k
 
 #aaclib="libfaac"
 aaclib="libfdk_aac" # Fraunhofer Library - bessere Qualität
@@ -108,10 +112,12 @@ esac
 logf=/tmp/h264-log
 videodir=/video
 vdr=$VDRDIR/vdr
+h264=h264
+lock="h264.lck"
 
 #join4=yes		# mplayer not working
 #generate=yes	# for future use
-#gen_name=doit
+#gen_name=doit	# for future use
 
 which avconv 2> /dev/null
 if [ $? -eq 0 ]
@@ -141,6 +147,18 @@ case $aac_br_select in
 esac
 }
 aac_select
+
+if [ "$1" == "auto" ]
+then
+    if [ ! -e $h264 ]
+    then
+	exit
+    fi
+    if [ -e $lock ]
+    then
+	exit
+    fi
+fi
 
 t=/tmp/info
 t2=/tmp/info2
@@ -309,9 +327,20 @@ while (true) do
     fi
     echo aac_br_select=$aac_br_select $aac_br1,$aac_br2,$aac_br3
     echo scale=$scale
-    echo "press Enter (a1,a2,p,c,n,o,a,m,?)"
+    echo aspect=$aspect
+    if [ -e $h264 ]
+    then
+	if [ -e $lock ]
+	then
+	    exit
+	fi
+	. $h264
+	stop=no
+	touch $lock
+    fi
     if [ "$stop" == "yes" ]
     then
+	echo "press Enter (a1,a2,p,c,n,o,a,m,?)"
 	read answer
 	#echo "[$answer]"
 	if [ "${answer:0:1}" == "a" -a ${#answer} -gt 1 ]
@@ -400,9 +429,14 @@ fi
 
 start=$(date +"%s")
 
+#set -x
+# 2010-01-28.23.16.50.99.rec
+# 2011-12-19.20.16.10-0.rec
 d=$(basename $PWD)
-d1=$(echo $d | cut -d '.' -f 1-2)
-d2=$(echo $d | cut -d '.' -f 3)
+#d1=$(echo $d | cut -d '.' -f 1-2)
+#d2=$(echo $d | cut -d '.' -f 3)
+d1=${d:0:13}
+d2=${d:14:2}
 if [ "${d2:0:1}" == "0" ]
 then
     d2=${d2:1:1}
@@ -414,6 +448,7 @@ then
 fi
 d3=$(echo $d | cut -d '.' -f 4-)
 dest=$d1.$d2.$d3
+#exit
 
 kennf=/tmp/kennf
 rm -f $kennf
@@ -472,8 +507,24 @@ wlog () {
     echo $d $1 >> $log
 }
 
+if [ -e ../$dest ]
+then
+    echo "Verzeichnis ../$dest schon vorhanden"
+    if [ "$stop" == "yes" ]
+    then
+	echo "weitermachen? [j|n]"
+	read answer
+	if [ "$answer" == "n" ]
+	then
+	    exit
+	fi
+    else
+	exit
+    fi
+else
+    mkdir ../$dest
+fi
 logt=$log
-mkdir ../$dest
 log="../$dest/logfile"
 d=`date +"%F %T"`
 echo "Start $d" $(hostname) > $log
@@ -495,7 +546,16 @@ then
     echo mux=$mux >> $log
 fi
 echo aac_br_select=$aac_br_select $aac_br1,$aac_br2,$aac_br3 >> $log
+if [ "$mp2_256" != "" ]
+then
+    echo mp2_256=$mp2_256
+fi
+if [ "$ac3_stereo" != "" ]
+then
+    echo ac3_stereo=$ac3_stereo
+fi
 echo "scale=$scale" >> $log
+echo "aspect=$aspect" >> $log
 #echo "preset=$preset" >> $log
 ls -lLk >> $log
 size1=$(du -L)
@@ -627,9 +687,34 @@ do
 		c=copy
 	    fi
 	    ;;
-	"ac3" | "eac3" | "aac")
+	"eac3" | "aac")
 	    a="-c:a:$stream copy"
 	    c=copy
+	    ;;
+	"ac3")
+	    if [ "$ac3_stereo" == "aac" ]
+	    then
+		if [ "$fmt" == "vdr" ]
+		then
+		    ityp=7
+		else
+		    ityp=10
+		fi
+		atyp=$(echo $line | cut -d ' ' -f $ityp)
+		atyp=${atyp//,/}
+		if [ "$atyp" == "stereo" ]
+		then
+		    br=192
+		    a="-c:a:$stream $aaclib -ac 2 -b:a:$stream "$br"k"
+		    c=$aaclib
+		else
+		    a="-c:a:$stream copy"
+		    c=copy
+		fi
+	    else
+		a="-c:a:$stream copy"
+		c=copy
+	    fi
 	    ;;
 	*)
 	    echo "$codec not valid!"
@@ -681,7 +766,8 @@ echo "preset=$preset" >> $log
 # Stream #0:0[0xad]: Video: mpeg2video (Main) ([2][0][0][0] / 0x0002), yuv420p, 720x576 [SAR 16:15 DAR 4:3], 15000 kb/s, 25 fps, 25 tbr, 90k tbn, 50 tbc
 # Stream #0:0[0x100]: Video: h264 (Main) ([27][0][0][0] / 0x001B), yuv420p, 720x576 [SAR 64:45 DAR 16:9], 25 fps, 25 tbr, 90k tbn, 50 tbc
 
-video="-c:v libx264 $preset $deinterlace $scale"
+video="-c:v libx264 $preset $deinterlace $scale $aspect"
+#video="-c:v libx264 $preset $scale"
 
 videof=$(cat $t | grep "Video:")
 videof=$(echo $videof | cut -d ' ' -f 4)
@@ -851,6 +937,7 @@ fi
 #exit
 
 #gopt="-n"
+#gopt="$probesize $deinterlace"
 gopt="$probesize"
 #gopt="$gopt -report"
 
@@ -1648,15 +1735,20 @@ fi
 #set -x
 #cd ../$dest
 
-
-wd=$(pwd)
-#$vdr --genindex="$wd"
-$vdr --genindex="../$dest"
+if [ -e $vdr ]
+then
+    wd=$(pwd)
+    #$vdr --genindex="$wd"
+    $vdr --genindex="../$dest"
+fi
 
 #ffmpeg -i 00001.ts 2>> $log
 $ffmpeg -i ../$dest/00001.ts 2>> $log
 
-/usr/bin/touch $videodir/.update
+if [ -e $videodir ]
+then
+    /usr/bin/touch $videodir/.update
+fi
 
 fi
 
@@ -1674,3 +1766,8 @@ comp=$(($size1*100/$size2))
 echo "vorher " $size1  >> $log
 echo "nachher" $size2  >> $log
 echo "Kompression: $comp %" >> $log
+if [ -e $h264 ]
+then
+    rm $h264
+    rm $lock
+fi
