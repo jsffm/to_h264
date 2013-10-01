@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# to_h264_server starten				jsffm@web.de
+# to_h264_server starten<------><------><------><------>jsffm@web.de
 
 #set -x
 
@@ -31,8 +31,15 @@ while (true) do
 		do
 		    #echo $rh
 		    dh=$(dirname $rh)
+		    if [ ! -e $dh/h264 ]
+		    then
+			continue
+		    fi
 		    cd $dh
-		    to_h264 auto > h264.log 2> h264.err
+		    if [ ! -e h264.lck ]
+		    then
+			to_h264 auto > h264.log 2> h264.err
+		    fi
 		    cd
 		    #break
 		done
