@@ -1,0 +1,11 @@
+#!/bin/bash
+
+# Show current Status
+
+set -x
+
+c=$(tail -n 1 /var/log/h264 | cut -d \  -f 3-)
+l=$c/h264.err
+
+tail -f $l
+
