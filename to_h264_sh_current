@@ -2,10 +2,48 @@
 
 # Show current Status
 
-set -x
+#set -x
 
 c=$(tail -n 1 /var/log/h264 | cut -d \  -f 3-)
 l=$c/h264.err
 
-tail -f $l
+
+#pause
+#echo "Press Enter"
+#read answer
+
+#exit
+
+case $1 in
+    "-s")
+	temp=/tmp/h264.err
+	#cp $l $temp
+	echo $c
+	d=$(grep "Duration:" $l)
+	d2=$(echo $d | cut -d \  -f 2)
+	echo "Duration: $d2"
+	dur1=$(date +"%s" -d ${d2:0:8})
+	b=$(date +"%s" -d "00:00:00")
+	dur=$(($dur1-$b))
+	tr '\r' '\n' < $l > $temp
+	t=$(tail -n 1 $temp)
+	# frame=14306 fps= 42 q=30.0 size=   90023kB time=00:09:31.81 bitrate=1289.7kbits/s dup=24 drop=0
+	#echo $t
+
+	#fps=${t:16:3}
+	fps=${t##*fps=}
+	fps=${fps:0:3}
+	#time=${t:48:11}
+	time=${t##*time=}
+	time=$(echo $time | cut -d \  -f 1)
+	t1=$(date +"%s" -d ${time:0:8})
+	t2=$(($t1-$b))
+	prz=$(($t2*100/$dur))
+	echo "fps=$fps time=$time $prz%"
+	;;
+
+    *)
+	tail -f $l
+	;;
+esac
 
