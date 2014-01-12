@@ -2,6 +2,9 @@
 
 # Show current Status
 
+# -s	Snapshot
+# -q	Queue
+
 #set -x
 
 c=$(tail -n 1 /var/log/h264 | cut -d \  -f 3-)
@@ -16,17 +19,23 @@ l=$c/h264.err
 
 case $1 in
     "-s")
-	temp=/tmp/h264.err
-	#cp $l $temp
+	if [ ! -e $l ]
+	then
+	    exit
+	fi
 	echo $c
+	#set -x
 	d=$(grep "Duration:" $l)
 	d2=$(echo $d | cut -d \  -f 2)
 	echo "Duration: $d2"
 	dur1=$(date +"%s" -d ${d2:0:8})
 	b=$(date +"%s" -d "00:00:00")
 	dur=$(($dur1-$b))
-	tr '\r' '\n' < $l > $temp
-	t=$(tail -n 1 $temp)
+
+	#temp=/tmp/h264.err
+	#tr '\r' '\n' < $l > $temp
+	#t=$(tail -n 1 $temp)
+	t=$(tr '\r' '\n' < $l | tail -n 1)
 	# frame=14306 fps= 42 q=30.0 size=   90023kB time=00:09:31.81 bitrate=1289.7kbits/s dup=24 drop=0
 	#echo $t
 
@@ -39,10 +48,33 @@ case $1 in
 	t1=$(date +"%s" -d ${time:0:8})
 	t2=$(($t1-$b))
 	prz=$(($t2*100/$dur))
+	#date "+%T" -d @$dur
+	restz=$(($dur-$t2))
+	restz2=$(($restz*25/$fps))
 	echo "fps=$fps time=$time $prz%"
+	echo -n "Est: "
+	date "+%T" -u -d @$restz2
+	;;
+
+    "-q")
+	#set -x
+	wo=$(which to_h264_server)
+	conf=$wo.conf
+	while read line
+	do
+	    if [ -e $line ]
+	    then
+		echo $line
+		find $line -name h264
+	    fi
+	done < $conf
 	;;
 
     *)
+	if [ ! -e $l ]
+	then
+	    exit
+	fi
 	tail -f $l
 	;;
 esac
