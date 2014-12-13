@@ -1,4 +1,4 @@
-#! /bin/sh
+#! /bin/bash
 
 # Record Eigenschaften
 
@@ -66,12 +66,17 @@ do
     typ=$(echo $line | cut -d ' ' -f 4)
     typ=${typ//,/}
     case $typ in
-	"mpeg2video" | "h264")
+	"mpeg2video" | "mpeg1video" | "h264")
 	    vcodec=$typ
-	    if [ "$fmt" == "vdr" ]
+	    if [ "$fmt" == "vdr" -o "$ffmpeg" == "avconv"  ]
 	    then
 		iaufl=7
 		ir=11
+		if [ "$typ" == "mpeg1video" ]
+		then
+		    iaufl=6
+		    ir=10
+		fi
 	    else
 		iaufl=10
 		ir=14
@@ -81,9 +86,9 @@ do
 	    r=${r//],/}
 	    echo $typ $aufl $r
 	    ;;
-	"mp2" | "aac" | "ac3")
+	"mp2" | "aac" | "ac3" | "eac3")
 	    id=$(echo $line | cut -d ' ' -f 2)
-	    if [ "$fmt" == "vdr" ]
+	    if [ "$fmt" == "vdr" -o "$ffmpeg" == "avconv" ]
 	    then
 		ityp=7
 		ibr=9
@@ -140,25 +145,35 @@ then
 fi
 s=$(($si/200))
 kbit=$((size*8/s))
-m=$(($si/12000))
-s=$(($s-$m*60))
-h=$(($si/720000))
-m=$(($m-$h*60))
-echo $h:$m:$s
+#m=$(($si/12000))
+#se=$(($s-$m*60))
+#h=$(($si/720000))
+#m=$(($m-$h*60))
+#echo $h:$m:$se
+date -u -d @$s +"%T"
 echo $kbit "kbit/s"
-if [ "$vcodec" == "mpeg2video" -a "$1" == "" ]
+#if [ "$vcodec" != "h264" -a "$1" == "" ]
+if [ "$vcodec" == "h264" ]
 then
-    echo "Nach h264 konvertieren? [s|p|t|a1|a2|m]"
+    echo "Already H264"
+fi
+if [ "$1" == "" ]
+then
+    echo "Nach h264 konvertieren? [s|p|t|a1|a2|s3|sc|sn|sd|720p|m|mpg|mc|gnn|?]"
     read answer
-    case $answer in
+    IFSs=$IFS
+    IFS=,
+    for a in $answer
+    do
+    case $a in
 	"s")
 	    touch h264
 	    ;;
 	"p")
-	    echo "join=projectx" > h264
+	    echo "join=projectx" >> h264
 	    ;;
 	"t")
-	    echo "join=tsmuxer" > h264
+	    echo "join=tsmuxer" >> h264
 	    ;;
 	"a1")
 	    echo "aac_br_select=1" >> h264
@@ -169,5 +184,56 @@ then
 	"m")
 	    echo "mkv=yes" >> h264
 	    ;;
+	"mpg")
+	    echo "vcodec=mpeg2video" >> h264
+	    echo "mp2=copy" >> h264
+	    ;;
+	"mc")
+	    echo "mp2=copy" >> h264
+	    ;;
+	"s3")
+	    echo "ac3_stereo=ac3" >> h264
+	    ;;
+	"sc")
+	    echo "ac3_stereo=aac" >> h264
+	    ;;
+	"sn")
+	    echo "ac3_stereo=no" >> h264
+	    ;;
+	"sd")
+	    echo "scale=\"-vf scale=720:576:interl=1\"" >> h264
+	    echo "ac3=\"mp2+ac3\"" >> h264
+	    ;;
+	"720p")
+	    echo "scale=\"-vf scale=1280:720\"" >> h264
+	    ;;
+	"?")
+	    echo "s wie voreingestellt"
+	    echo "p join=projectx"
+	    echo "t join=tsmuxer"
+	    echo "a1 aac_br_select=1"
+	    echo "a2 aac_br_select=2"
+	    echo "m mkv=yes"
+	    echo "mpg vcodec=mpeg2video mp2=copy"
+	    echo "mp2=copy"
+	    echo "s3 ac3_stereo=ac3"
+	    echo "sc ac3_stereo=aac"
+	    echo "sn ac3_stereo=no"
+	    echo "sd scale=\"-vf scale=720:576:interl=1\""
+	    echo "720p scale=\"-vf scale=1280:720\""
+	    echo "gnn gop="
+	    ;;
+	*)
+	    if [ "${a:0:1}" == "g" ]
+	    then
+		echo "gop=\"-g ${a:1}\"" >> h264
+	    fi
+	    ;;
     esac
+    done
+    IFS=$IFSs
+    if [ -e h264 ]
+    then
+	cat h264
+    fi
 fi
