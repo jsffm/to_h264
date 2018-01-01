@@ -4,7 +4,7 @@
 
 # Funktioniert mit .vdr und .ts
 #
-# Ziel wird in .rec Ordner + 1 min gespeichert
+# Ziel wird in .rec Ordner + 1 gespeichert
 #
 # Video wird nach h264 konvertiert
 # Audio mp2 wird nach aac konvertiert
@@ -21,46 +21,93 @@
 #
 # Softhddevice spielt das Ergebnis klaglos ab
 #
-#	Unbedingt die Filmlänge überprüfen!
+#	Unbedingt die FilmlÃ¤nge Ã¼berprÃ¼fen!
 #
 #	.vdr > 1 Datei und > 1 Audiospur mit procetx vorbehandeln
 #
 #	ToDo
 #
-#	join2: ältere VDR-Version erkennen
-#
 #	info-Datei anpassen http://www.vdr-wiki.de/wiki/index.php/Info
+
+# Schalter sind nach to_h264.conf verlagert, hier nichts Ã¤ndern!
 
 #set -x
 
 #mpeg2_q="-q 5"
 mpeg2_q="-q 5 -maxrate 3000k -bufsize 1835k"
+h264_profile=high
+h264_level=3.0	# 720x576i
+hevc_level=4.0
+nvenc_b_HD="-b:v 5M"
+hevcenc=libx265
+hevcenc_b="-b:v 2M"
 
-wo=$(which to_h264)
-conf=$wo.conf
+#set -x
+if [ -e /etc/to_h264.conf ]
+then
+    conf=/etc/to_h264.conf
+fi
+if [ -e $0.conf ]
+then
+    conf=$0.conf
+fi
+if [ "$conf" == "" ]
+then
+    wo=$(which to_h264)
+    conf=$wo.conf
+fi
+if [ "$conf" == "" ]
+then
+    echo "conf-Datei fehlt."
+    exit 8
+fi
+#exit
 
 . $conf
 
 logf=/tmp/h264-log
-h264=h264
+h264_k=h264
 lock="h264.lck"
 
 #join4=yes		# mplayer not working
 #generate=yes	# for future use
 #gen_name=doit	# for future use
 
-which avconv 2> /dev/null
-if [ $? -eq 0 ]
-then
-    ffmpeg=avconv
-    ffprobe=avprobe
-fi
+#set -x
+
 which ffmpeg 2> /dev/null
 if [ $? -eq 0 ]
 then
     ffmpeg=ffmpeg
     ffprobe=ffprobe
 fi
+which avconv 2> /dev/null
+if [ $? -eq 0 ]
+then
+    ffmpeg=avconv
+    ffprobe=avprobe
+fi
+which x/opt/ffmpegnv/bin/ffmpeg 2> /dev/null
+if [ $? -eq 0 ]
+then
+    ffmpeg=/opt/ffmpegnv/bin/ffmpeg
+    ffprobe=/opt/ffmpegnv/bin/ffprobe
+fi
+
+if [ "$h264enc" == "" ]
+then
+    h264enc=libx264
+    if [ $ffmpeg == "/opt/ffmpegnv/bin/ffmpeg" ]
+    then
+	h264enc=h264_nvenc
+    fi
+    nv=$($ffmpeg 2>&1 | grep "enable-nvenc")
+    if [ "$nv" != "" ]
+    then
+	h264enc=h264_nvenc
+    fi
+fi
+#exit
 
 aac_select() {
 case $aac_br_select in
@@ -79,17 +126,22 @@ esac
 
 if [ "$1" == "auto" ]
 then
-    if [ ! -e $h264 ]
+    if [ ! -e $h264_k ]
     then
 	exit
     else
-	. $h264
+	. $h264_k
     fi
     if [ -e $lock ]
     then
 	exit
     fi
 fi
+if [ "$splits" != "" ]
+then
+    split="-f segment -segment_start_number 1 -segment_time $splits"
+fi
+
 aac_select
 
 t=/tmp/info
@@ -101,7 +153,9 @@ then
     $ffmpeg -i $infile 2> $t
     fmt=ts
     w="*.ts"
+    index=index
     info=info
+    f=$(grep "^F" $info | cut -d ' ' -f 2)
 fi
 if [ -e 001.vdr ]
 then
@@ -110,16 +164,20 @@ then
     $ffmpeg $form -i $infile 2> $t
     fmt=vdr
     w="0*.vdr"
+    index=index.vdr
     info=info.vdr
+    f=25
 fi
 if [ "$fmt" == "" ]
 then
     echo "Falsche Directory?"
     exit
 fi
-v=$(grep "$ffmpeg version" $t)
+#set -x
+v=$(grep "ffmpeg version" $t)
 #v=$(ffmpeg -version)
 v=$(echo $v | cut -d \  -f 3)
+#exit
 
 for r in $w
 do
@@ -130,6 +188,7 @@ nfiles=$(echo $infiles | wc -w)
 ac3_vorh=$(grep ac3 $t)
 
 show_t() {
+    #set -x
     while read line
     do
 	typ=$(echo $line | cut -d ' ' -f 4)
@@ -137,6 +196,7 @@ show_t() {
 	stream=$(echo $line | cut -d ' ' -f 2)
 	stream=${stream:0:11}
 	case $typ in
+	    # Stream '#0:0[0x6e]:' Video: mpeg2video '(Main)' '([2][0][0][0]' / '0x0002),' 'yuv420p(tv),' 720x576 '[SAR' 64:45 DAR '16:9],' max. 15000 kb/s, 25 fps, 25 tbr, 90k tbn, 50 tbc
 	    "mpeg2video" | "mpeg1video" | "h264" | "hevc")
 		if [ "$fmt" == "vdr" ]
 		then
@@ -148,7 +208,7 @@ show_t() {
 			ir=10
 		    fi
 		else
-		    if [ "$ffmpeg" == "ffmpeg" ]
+		    if [ "$ffmpeg" != "avconv" ]
 		    then
 			iaufl=10
 			ir=14
@@ -162,13 +222,13 @@ show_t() {
 		r=${r//],/}
 		echo $stream $typ $aufl $r
 		;;
-	    "mp2" | "aac" | "ac3")
+	    "mp2" | "aac" | "ac3" | "eac3")
 		if [ "$fmt" == "vdr" ]
 		then
 		    ityp=7
 		    ibr=9
 		else
-		    if [ "$ffmpeg" == "ffmpeg" ]
+		    if [ "$ffmpeg" != "avconv" ]
 		    then
 			ityp=10
 			ibr=12
@@ -221,7 +281,7 @@ while (true) do
 	#    join=ffmpeg
 	#fi
     fi
-    if [ "$ffmpeg" != "ffmpeg" ]
+    if [ "$ffmpeg" == "avconv" ]
     then
 	if [ "$join" == "ffmpeg" ]
 	then
@@ -260,8 +320,9 @@ while (true) do
     echo "Format=$fmt"
     echo "Anzahl Dateien: $nfiles"
     echo mkv=$mkv
+    echo outf=$outf
     echo audio_auswahl=$audio_auswahl
-    echo subtitel=$subtitel
+    echo subtitle=$subtitle
     echo join=$join
     #echo join2=$join2
     #echo join3=$join3
@@ -286,19 +347,23 @@ while (true) do
     then
 	echo vcodec=$vcodec
     fi
-    if [ -e $h264 ]
+    if [ "$odir" != "" ]
+    then
+	echo odir=$odir
+    fi
+    if [ -e $h264_k ]
     then
 	if [ -e $lock ]
 	then
 	    exit
 	fi
-	. $h264
+	. $h264_k
 	stop=no
 	touch $lock
     fi
     if [ "$stop" == "yes" ]
     then
-	echo "press Enter (a1,a2,p,c,n,o,a,m,sc,s3,gnn,mpg,?)"
+	echo "press Enter (a1,a2,p,c,n,o,a,m,sc,s3,aa,gnn,mpg,mc,?)"
 	read answer
 	#echo "[$answer]"
 	case $answer in
@@ -339,6 +404,14 @@ while (true) do
 		    mkv=yes
 		fi
 		;;
+	    "mp4")
+		if [ "$outf" == "mp4" ]
+		then
+		    outf=""
+		else
+		    outf="mp4"
+		fi
+		;;
 	    "s3")
 		if [ "$ac3_stereo" == "ac3" ]
 		then
@@ -355,9 +428,22 @@ while (true) do
 		    ac3_stereo=aac
 		fi
 		;;
+	    "aa")
+		ac3=aac
+		;;
 	    "mpg")
 		vcodec=mpeg2video
 		mp2=copy
+		;;
+	    "mc")
+		mp2=copy
+		;;
+	    "hevc"|"h")
+		vcodec=hevc
+		;;
+	    "oly")
+		mkv=yes
+		ac3=aac
 		;;
 	    "?")
 		echo "a audio_auswahl"
@@ -366,11 +452,14 @@ while (true) do
 		echo "f ffmpeg"
 		echo "gnn gop=\"-g nn\""
 		echo "m mkv"
+		echo "mp4 mp4"
+		echo "mc mp2=copy"
 		echo "n no"
 		echo "o concat"
 		echo "p projectx"
 		echo "s3 ac3_stereo=ac3"
 		echo "sc ac3_stereo=aac"
+		echo "aa ac3=aac"
 		echo "t tsmuxer"
 		;;
 	    *)
@@ -422,19 +511,44 @@ start=$(date +"%s")
 d=$(basename $PWD)
 #d1=$(echo $d | cut -d '.' -f 1-2)
 #d2=$(echo $d | cut -d '.' -f 3)
-d1=${d:0:13}
-d2=${d:14:2}
-if [ "${d2:0:1}" == "0" ]
-then
-    d2=${d2:1:1}
-fi
-d2=$(($d2+1))
-if [ ${#d2} == 1 ]
-then
-    d2=0$d2
-fi
+#d1=${d:0:13}
+#d2=${d:14:2}
+#if [ "${d2:0:1}" == "0" ]
+#then
+#    d2=${d2:1:1}
+#fi
+#d2=$(($d2+1))
+#if [ ${#d2} == 1 ]
+#then
+#    d2=0$d2
+#fi
+#set -x
+#dd=${d:0:10}
+dd=${d:0:16}
+#dh=${d:11:2}
+#dm=${d:14:2}
+#s=$(date -u "+%s" -d "$dd $dh:$dm")
+#s=$(($s+60))
+#dd2=$(date -u "+%F.%H.%M" -d @$s)
 d3=$(echo $d | cut -d '.' -f 4-)
-dest=$d1.$d2.$d3
+if [ "$fmt" == "vdr" ]
+then
+    #dest=$(echo $dest | cut -d '.' -f 1-3)."1-0.rec"
+    d3="1-0.rec"
+fi
+#dest=$d1.$d2.$d3
+#dest=$dd2.$d3
+dest=$dd.$d3
+d30=$(echo $d3|cut -d '.' -f 1)
+d31=$(echo $d30|cut -d '-' -f 1)
+d32=$(echo $d30|cut -d '-' -f 2)
+while [ -e ../$dest ]
+do
+    d32=$(($d32+1))
+    #dd2=$(date -u "+%F.%H.%M" -d @$s)
+    #dest=$dd2.$d31-$d32.rec
+    dest=$dd.$d31-$d32.rec
+done
 #exit
 
 kennf=/tmp/kennf
@@ -442,11 +556,12 @@ rm -f $kennf
 auswahl_hilfe=/tmp/auswahl_hilfe
 rm -f $auswahl_hilfe
 touch $auswahl_hilfe
-if [ "$fmt" == "vdr" ]
-then
-    dest=$(echo $dest | cut -d '.' -f 1-3)."1-0.rec"
-fi
-
+#if [ "$fmt" == "vdr" ]
+#then
+    #dest=$(echo $dest | cut -d '.' -f 1-3)."1-0.rec"
+    #dest=$(echo $dest | cut -d '.' -f 1-3)."$d31-$d32.rec"
+#fi
+#exit
 
 while read line
 do
@@ -462,12 +577,16 @@ done < $info
 
 if [ "$mkv" == "yes" ]
 then
+    outf=mkv
+fi
+if [ "$outf" != "" ]
+then
     dest="."
     if [ "$odir" != "" ]
     then
 	dest="$odir"
     fi
-    subtitel=no
+    #subtitle=no
     # Chapter
     if [ -e marks ]
     then
@@ -505,6 +624,36 @@ then
 	done < marks
 	metaf="-i ffmetadata"
 	#exit
+    else
+	#nix(){
+	#set -x
+	meta=ffmetadata
+	echo ";FFMETADATA1" > $meta
+	dmin=10
+	dms=$(($dmin*60*1000))
+	si=$(ls -l $index)
+	si=$(echo $si | cut -d ' ' -f 5)
+	if [ "$f" == "50" ]
+	then
+	    si=$(($si/2))
+	fi
+	ds=$(($si/200))
+	sms=$(($ds*1000))
+	ca=0
+	for (( c=$dms ; c<=$sms ; c+=$dms ))
+	do
+	    echo "[CHAPTER]" >> $meta
+	    #echo "TIMEBASE=1" >> $meta
+	    echo "TIMEBASE=1/1000" >> $meta
+	    echo "START=$ca" >> $meta
+	    #echo "#chapter ends at $line" >> $meta
+	    #echo "END=$(($c-1))" >> $meta
+	    echo "END=$c" >> $meta
+	    ca=$c
+	done
+	metaf="-i ffmetadata"
+	#exit
+	#}
     fi
 fi
 
@@ -524,7 +673,7 @@ then
     #join=no
     if [ "$join2m" == "yes" ]
     then
-	subtitel=no
+	subtitle=no
     fi
     rm -f $filej2
 fi
@@ -536,7 +685,7 @@ wlog () {
     echo $d $1 >> $log
 }
 
-if [ -e ../$dest ]
+if [ -e ../$dest -a "$dest" != "."  ]
 then
     echo "Verzeichnis ../$dest schon vorhanden"
     if [ "$stop" == "yes" ]
@@ -562,13 +711,14 @@ fi
 d=`date +"%F %T"`
 echo "Start $d" $(hostname) > $log
 #echo $(hostname) >> $log
+uname -p >> $log
 echo $PWD >> $log
 echo $PWD >> /tmp/h264_current
 echo $d $PWD >> /var/log/h264
 echo "gop=$gop" >> $log
 echo "mkv=$mkv" >> $log
 echo "audio_auswahl=$audio_auswahl" >> $log
-echo "subtitel=$subtitel" >> $log
+echo "subtitle=$subtitle" >> $log
 echo "join=$join" >> $log
 #echo "join2=$join2" >> $log
 #if [ "$join3" != "" ]
@@ -597,11 +747,39 @@ if [ "$ac3" != "" ]
 then
     echo ac3=$ac3 >> $log
 fi
+#echo "h264_level=$h264_level" >> $log
+echo "h264=$h264" >> $log
+echo "h264enc=$h264enc" >> $log
+#echo "maxrate=$maxrate" >> $log
 echo "scale=$scale" >> $log
 echo "aspect=$aspect" >> $log
 #echo "preset=$preset" >> $log
 echo vcodec=$vcodec >> $log
+#set -x
+scantype=$(mediainfo --Inform="Video;%ScanType/String%" "$infile")
+echo "scantype=$scantype" >> $log
+if [ "$split" != "" ]
+then
+    echo "split=$split" >> $log
+fi
+if [ "$scantype" == "Progressive" ]
+then
+    deinterlace=
+fi
+echo "deinterlace=$deinterlace" >> $log
+#exit
+    
 ls -lLk >> $log
+
+si=$(ls -l $index)
+si=$(echo $si | cut -d ' ' -f 5)
+if [ "$f" == "50" ]
+then
+    si=$(($si/2))
+fi
+s=$(($si/200))
+date -u -d @$s "+%T" >> $log
+
 size1=$(du -L)
 size1=$(echo $size1 | cut -d ' ' -f 1)
 cat $logt >> $log
@@ -662,13 +840,18 @@ grep "Stream" $t | grep "Audio" > $t2
 # Stream #0:2[0x102](deu): Audio: ac3 ([129][0][0][0] / 0x0081), 48000 Hz, stereo, s16, 448 kb/s
 # Stream #0:2[0x1101](deu): Audio: ac3 (AC-3 / 0x332D4341), 48000 Hz, stereo, s16, 448 kb/s
 # Stream #0:2[0x1101](deu): Audio: ac3 (AC-3 / 0x332D4341)  48000 Hz  stereo  s16  448 kb/s
+# Stream #0:1[0xca](deu): Audio: aac_latm (LC) ([17][0][0][0] / 0x0011), 48000 Hz, 5.1, fltp
 
 # ffmpeg -i INPUT -metadata:s:a:1 language=eng OUTPUT
+
+map="-map 0:v:0"
 
 declare -a au
 declare -a ac
 declare -a ab
-map="-map 0:v:0"
+declare -a am
+declare -a aach
+declare -a aaf
 audio=""
 rm -f $kennf
 bras=0
@@ -677,7 +860,7 @@ while read line
 do
     #set -x
     echo $line
-    if [ "$ffmpeg" == "ffmpeg" ]
+    if [ "$ffmpeg" != "avconv" ]
     then
 	del1=":"
     else
@@ -713,12 +896,21 @@ do
 	#lang=""
     #fi
     #fi
+    #set -x
     kenn=$(echo $line | cut -d ' ' -f 2 | cut -d '[' -f 2 | cut -d ']' -f 1)
-    echo "$kenn $stream" >> $kennf
+    kenn=$(($kenn))
+    #set +x
     #exit
     br=""
+    ch=""
+    ame=""
     case "$codec" in
 	"mp2")
+	    line2=${line//,/}
+	    atyp1=${line2#*Hz*}
+	    atyp=$(echo $atyp1 | cut -d ' ' -f 1)
+	    atyp=${atyp//,/}
+	    #if [ "$atyp" == "stereo" ]
 	    a="-c:a:$ostream copy"
 	    c=copy
 	    if [ "$mp2" == "aac" ]
@@ -726,96 +918,277 @@ do
 		aac_br $bra
 		a="-c:a:$ostream $aaclib -b:a:$ostream "$br"k"
 		c=$aaclib
+		ame=" -streamid $stream1:$stream1"
+		if [ "$atyp" == "monox" ]
+		then
+		    #set -x
+		    br=$(($br/2))
+		    if [ $br -lt 48 ]
+		    then
+			br=48
+		    fi
+		    a="-c:a:$ostream $aaclib -b:a:$ostream "$br"k -ac:a:$ostream 1"
+		    #c="$aaclib -ac:a:$ostream 1"
+		    c="$aaclib"
+		    ch=1
+		    #exit
+		fi
 	    fi
 	    if [ "$mp2_256" == "ac3" -a $bra -ge 256 ]
 	    then
 		br=192
-		a="-c:a:$ostream ac3 -ac 2 -b:a:$ostream "$br"k"
-		c="ac3 -ac 2"
+		a="-c:a:$ostream ac3 -ac:a:$ostream 2 -b:a:$ostream "$br"k"
+		#c="ac3 -ac 2"
+		c="ac3"
+		ch=2
+		kenn=$(($kenn+100))
 	    fi
 	    if [ "$mp2_256_no_ac3" == "ac3" -a $bra -ge 256 -a "$ac3_vorh" == "" ]
 	    then
 		br=192
-		a="-c:a:$ostream ac3 -ac 2 -b:a:$ostream "$br"k"
-		c="ac3 -ac 2"
+		a="-c:a:$ostream ac3 -ac:a:$ostream 2 -b:a:$ostream "$br"k"
+		#c="ac3 -ac 2"
+		c="ac3"
+		ch=2
+		kenn=$(($kenn+100))
+	    fi
+	    if [ "$mp2" == "ac3-6" ]
+	    then
+		br=448
+		a="-c:a:$ostream ac3 -ac:a:$ostream 6 -b:a:$ostream "$br"k"
+		#c="ac3 -ac 6"
+		c="ac3"
+		ch=6
+		kenn=$(($kenn+100))
 	    fi
 	    ;;
-	"aac")
+	"mp3")
+	    #set -x
+	    if [ "$mp3" == "no" ]
+	    then
+		#continue
+		a=""
+		c=""
+	    else
+		a="-c:a:$stream copy"
+		c=copy
+	    fi
+	    ;;
+	"aac"|"aac_latm")
+	    # Stream #0:1[0xca](deu): Audio: aac_latm (LC) ([17][0][0][0] / 0x0011), 48000 Hz, 5.1, fltp
+	    line2=${line//,/}
+	    atyp1=${line2#*Hz*}
+	    atyp=$(echo $atyp1 | cut -d ' ' -f 1)
+	    atyp=${atyp//,/}
 	    a="-c:a:$stream copy"
+	    if [ "$outf" == "mp4" ]
+	    then
+		a="$a -bsf:a aac_adtstoasc"
+	    fi
 	    c=copy
 	    if [ "$vcodec" == "mpeg2video" ]
 	    then
 		br=192
 		a="-c:a:$ostream mp2 -b:a:$ostream "$br"k"
 		#c="mp2 -b 192k"
-		c="mp2"
+		#c="mp2"
+		c="libtwolame"
+	    fi
+	    if [ "$aac" == "aac" ]
+	    then
+		aac_br 192
+		a="-c:a:$ostream $aaclib -b:a:$ostream "$br"k"
+		c=$aaclib
+	    fi
+	    if [ "$atyp" != "stereo" ]
+	    then
+		echo $codec $atyp >> $log
+		#br=256
+		#a="-c:a:$ostream eac3 -b:a:$ostream "$br"k"
+		#c=eac3
+		br=448
+		a="-c:a:$ostream ac3 -b:a:$ostream "$br"k"
+		c=ac3
 	    fi
 	    ;;
 	"eac3")
-	    a="-c:a:$ostream copy"
-	    c=copy
+	    if [ "$eac3" == "" -o "$eac3" == "copy" ]
+	    then
+		a="-c:a:$ostream copy"
+		c=copy
+		kenn=$(($kenn+100))
+		map="$map -streamid $stream1:0x84"
+		aid=$((0x80+$stream1))
+		ame=" -streamid $stream1:$aid"
+	    fi
+	    if [ "$eac3" == "aac" ]
+	    then
+		#set -x
+		# Stream #0:1[0x101](deu): Audio: eac3 ([135][0][0][0] / 0x0087), 48000 Hz, 5.1(side), fltp, 256 kb/s
+		line2=${line//,/}
+		atyp1=${line2#*Hz*}
+		atyp=$(echo $atyp1 | cut -d ' ' -f 1)
+		atyp=${atyp//,/}
+		if [ "$atyp" == "stereo" ]
+		then
+		    aac_br 192
+		    a="-c:a:$ostream $aaclib -b:a:$ostream "$br"k"
+		    c=$aaclib
+		else
+		    br=448
+		    #a="-c:a:$ostream ac3 -ac:a:$ostream 2 -b:a:$ostream "$br"k"
+		    a="-c:a:$ostream ac3 -b:a:$ostream "$br"k"
+		    c="ac3"
+		fi
+		#exit
+	    fi
+	    if [ "$eac3" == "ac3" ]
+	    then
+		br=448
+		a="-c:a:$ostream ac3 -b:a:$ostream "$br"k"
+		c=ac3
+	    fi
 	    ;;
 	"ac3")
 	    a="-c:a:$ostream copy"
 	    c=copy
-	    if [ "$fmt" == "vdr" ]
-	    then
-		ityp=7
-	    else
-		ityp=10
-	    fi
+	    #ame=" -streamid $stream1:0x84"
+	    aid=$((0x80+$stream1))
+	    ame=" -streamid $stream1:$aid"
+	    #if [ "$fmt" == "vdr" ]
+	    #then
+		#ityp=7
+	    #else
+		#ityp=10
+	    #fi
 	    #atyp=$(echo $line | cut -d ' ' -f $ityp)
 	    line2=${line//,/}
 	    atyp1=${line2#*Hz*}
 	    atyp=$(echo $atyp1 | cut -d ' ' -f 1)
 	    atyp=${atyp//,/}
-	    case $ac3_stereo in
-		"aac")
-		    if [ "$atyp" == "stereo" ]
-		    then
-			br=192
-			a="-c:a:$ostream $aaclib -ac 2 -b:a:$ostream "$br"k"
-			c="$aaclib -ac 2"
-		    fi
-		;;
-		"ac3")
-		    if [ "$atyp" == "stereo" -a $bra -gt 192 ]
-		    then
-			br=192
-			a="-c:a:$ostream ac3 -ac 2 -b:a:$ostream "$br"k"
-			c="ac3 -ac 2"
-		    fi
-		;;
-	    esac
+	    if [ "$atyp" == "stereo" ]
+	    then
+		case $ac3_stereo in
+		    "aac")
+			#br=192
+			br=128
+			a="-c:a:$ostream $aaclib -ac:a:$ostream 2 -b:a:$ostream "$br"k"
+			#c="$aaclib -ac 2"
+			c="$aaclib"
+			ch=2
+			;;
+		    "ac3")
+			if [ $bra -gt 192 ]
+			then
+			    br=192
+			    a="-c:a:$ostream ac3 -ac:a:$ostream 2 -b:a:$ostream "$br"k"
+			    #c="ac3 -ac 2"
+			    c="ac3"
+			    ch=2
+			fi
+			;;
+		    "ac3-6")
+			br=448
+			a="-c:a:$ostream ac3 -ac:a:$ostream 6 -b:a:$ostream "$br"k"
+			#c="ac3 -ac 6"
+			c="ac3"
+			ch=6
+			;;
+		esac
+	    fi
 	    if [ "$ac3" == "mp2+ac3" ]
 	    then
 		br=192
-		#a="-c:a:$ostream mp2 -b:a:$ostream "$br"k -ac:$ostream 6 -af:$ostream aresample=matrix_encoding=dplii"
-		a="-c:a:$ostream mp2 -b:a:$ostream "$br"k -ac:$ostream 2"
-		c="mp2"
+		#a="-c:a:$ostream libtwolame -b:a:$ostream "$br"k -ac:a:$ostream 2 -af:a:$ostream aresample=matrix_encoding=dplii:lfe_mix_level=2"
+		a="-c:a:$ostream libtwolame -b:a:$ostream "$br"k -ac:a:$ostream 2"
+		#c="mp2"
+		c="libtwolame"
+		#ch=2
 		au[$ostream]=$a
 		ac[$ostream]=$c
 		ab[$ostream]=$br"k"
+		#aach[$ostream]=$ch
+		aaf[$ostream]="aresample=matrix_encoding=dplii:lfe_mix_level=2"
+		am[$ostream]="-map 0:$stream1"
 		ostream=$(($ostream+1))
-	        a="$a -c:a:$stream1 copy"
+		br=""
+		ch=""
+	        #a="$a -c:a:$stream1 copy"
+	        a="$a -c:a:$ostream copy"
 		c=copy
 	        map="$map -map 0:a:$stream"
+		kenn1=$(printf "%05d" $kenn)
+		echo "$kenn1" $(($stream+1)) >> $kennf
+	    fi
+	    if [ "$ac3" == "ac3+eac3" ]
+	    then
+		#a="-c:a:$ostream mp2 -b:a:$ostream "$br"k -ac:a:$ostream 2"
+	        a="-c:a:$ostream copy"
+		c="copy"
+		au[$ostream]=$a
+		ac[$ostream]=$c
+		#ab[$ostream]=$br"k"
+	        #am[$ostream]="-map 0:a:$stream"
+		am[$ostream]="-map 0:$stream1"
+		ostream=$(($ostream+1))
+		br=256
+	        #a="$a -c:a:$stream1 copy"
+		#a="$a -c:a:$ostream eac3 -b:a:$ostream "$br"k"
+		a="$a -c:a:$ostream eac3 -b:a:$ostream "$br"k"
+		#a="$a -dialnorm -31"
+		c=eac3
+	        map="$map -map 0:a:$stream"
+		kenn1=$(printf "%05d" $kenn)
+		echo "$kenn1" $(($stream+1)) >> $kennf
+	    fi
+	    if [ "$ac3" == "eac3" -a "$atyp" != "stereo" ]
+	    then
+		br=256
+		a="-c:a:$ostream eac3 -b:a:$ostream "$br"k"
+		c=eac3
 	    fi
 	    if [ "$ac3" == "mp2" ]
 	    then
 		br=192
-		a="-c:a:$ostream mp2 -b:a:$ostream "$br"k -ac:$ostream 6 -af:$ostream aresample=matrix_encoding=dplii"
-		c="mp2"
+		#a="-c:a:$ostream mp2 -b:a:$ostream "$br"k -ac:a:$ostream 2 -af:a:$ostream aresample=matrix_encoding=dplii:lfe_mix_level=2"
+		a="-c:a:$ostream libtwolame -b:a:$ostream "$br"k -af:a:$ostream aresample=matrix_encoding=dplii:lfe_mix_level=2"
+		#c="mp2"
+		c="libtwolame"
+		#ch=2
+		af="aresample=matrix_encoding=dplii:lfe_mix_level=2"
 	    fi
+	    if [ "$ac3" == "aac" ]
+	    then
+		br=192
+		a="-c:a:$ostream $aaclib -b:a:$ostream "$br"k -ac:a:$ostream 2 -af:$ostream aresample=matrix_encoding=dplii:lfe_mix_level=2"
+		#c="$aaclib -ac 2"
+		c="$aaclib"
+		ch=2
+		af="aresample=matrix_encoding=dplii:lfe_mix_level=2"
+	    fi
+	    #set -x
+	    kenn=$(($kenn+100))
+	    #exit
+	    ;;
+	dts)
 	    ;;
 	*)
 	    echo "$codec not valid!"
 	    exit
 	    ;;
     esac
-    #map="$map -map 0:$stream1"
-    map="$map -map 0:a:$stream"
-    audio="$audio $a"
+    #if [ "$codec" == "mp3" -and "$mp3" == "no" ]
+    #then
+	#continue
+    #fi
+    if [ "$a" != "" ]
+    then
+	map="$map -map 0:$stream1"
+	#map="$map -map 0:a:$stream"
+	audio="$audio $a"
+	kenn=$(printf "%05d" $kenn)
+	echo "$kenn $stream" >> $kennf
+    fi
 #set -x
     if [ "$lang" != "" ]
     then
@@ -827,50 +1200,150 @@ do
 	fi
     fi
     #echo stream=$stream
-    au[$ostream]=$a
-    ac[$ostream]=$c
-    if [ "$br" != "" ]
+    if [ "$a" != "" ]
     then
-	ab[$ostream]=$br"k"
+	au[$ostream]=$a
+	ac[$ostream]=$c
+	am[$ostream]="-map 0:$stream1"
+	#am[$ostream]="-map 0:$stream1 $ame"
+	if [ "$br" != "" ]
+	then
+	    ab[$ostream]=$br"k"
+	fi
+	if [ "$ch" != "" ]
+	then
+	    aach[$ostream]=$ch
+	fi
+	if [ "$af" != "" ]
+	then
+	    aaf[$ostream]=$af
+	fi
+	aline[$ostream]=$line
+	bras=$(($bras+$bra))
+	ostream=$(($ostream+1))
     fi
-    aline[$ostream]=$line
-    bras=$(($bras+$bra))
-    ostream=$(($ostream+1))
 done < $t2
 #exit
 brv=$(($brv-$bras))
 echo "Videobitrate: $brv" >> $log
 br=$(($brv/2))
+if [ "$h264" == "h264" ]
+then
+    br=$brv
+fi
 if [ $br -gt 2000 ]
 then
     br=2000
 fi
 #preset="-preset fast -tune film -profile:v main -level 4.0 -crf $crf -maxrate "$br"k -bufsize 1835k"
-if [ "$ffmpeg" == "ffmpeg" ]
+
+# Scan nach "[SAR" hw
+
+#set -x
+videof=$(cat $t | grep "Video:")
+hw=${videof%%[SAR*}
+nw=$(echo $hw|wc -w)
+hw=$(echo $hw|cut -d \  -f $nw)
+vw=$(echo $hw|cut -d 'x' -f 2)
+hw=$(echo $hw|cut -d 'x' -f 1)
+videof=$(echo $videof | cut -d ' ' -f 4)
+if [ "$scale" != "" ]
 then
-    level="-level 4.0"
+    hw1=${scale##*scale=}
+    hw=$(echo $hw1|cut -d ':' -f 1)
+fi
+if [ $hw -gt 720 ]
+then
+    h264_level=4.2
+    hevc_level=4.1
+    maxrate=no
+    #nvenc_b="-b:v 3M"
+    #nvenc_b="-b:v 5M"
+    nvenc_b=$nvenc_b_HD
+fi
+if [ $hw -gt 1280 ]
+then
+    h264_level=4.2
+    hevc_level=4.1
+fi
+#exit
+if [ "$ffmpeg" != "avconv" ]
+then
+    level="-level $h264_level"
+    level_hevc="-level $hevc_level"
 #else
     #level="-x264-params level=40"
 fi
+echo "h264_level=$h264_level" >> $log
+echo "maxrate=$maxrate" >> $log
 
-videof=$(cat $t | grep "Video:")
-videof=$(echo $videof | cut -d ' ' -f 4)
+if [ "$maxrate" != "no" ]
+then
+    maxr="-maxrate "$br"k -bufsize 1835k"
+fi
 
-preset="-preset fast -tune film -profile:v main $level -crf $crf -maxrate "$br"k -bufsize 1835k"
+if [ "$hwaccel" == "cuvid" ]
+then
+    #set -x
+    echo hwaccel=$hwaccel >> $log
+    case $videof in
+	hevc)
+	    #gopt="$gopt -hwaccel cuvid -c:v hevc_cuvid"
+	    gopt="$gopt -c:v hevc_cuvid"
+	    ;;
+	h264)
+	    #gopt="$gopt -hwaccel cuvid -c:v h264_cuvid"
+	    gopt="$gopt -c:v h264_cuvid"
+	    ;;
+	mpeg2video)
+	    #gopt="$gopt -hwaccel cuvid -c:v mpeg2_cuvid"
+	    gopt="$gopt -c:v mpeg2_cuvid"
+	    ;;
+    esac
+    #exit
+fi
+
+set_h264_nvenc()
+{
+    #preset="-profile:v $h264_profile -b:v 1500k -crf $crf"
+    nvenc_b=
+    preset="-preset hq -profile:v $h264_profile $level -cq $crf $nvenc_b $maxr"
+    lspci | grep VGA >> $log
+    grep "NVIDIA GPU " /var/log/Xorg.0.log >> $log
+}
+
+preset="-preset fast -tune film -profile:v $h264_profile $level -crf $crf $maxr"
+if [ "$videof" == "hevc" ]
+then
+    #preset="-preset fast -tune film -profile:v main $level -crf $crf -maxrate "$br"k -bufsize 1835k"
+    preset="-preset fast -tune film -profile:v $h264_profile $level -crf $crf"
+    #preset="$preset $gop"
+    maxr=
+    deinterlace=
+fi
+if [ $h264enc == "h264_nvenc" ]
+then
+    set_h264_nvenc
+fi
 preset="$preset $gop"
 
 # Stream #0:0[0xad]: Video: mpeg2video (Main) ([2][0][0][0] / 0x0002), yuv420p, 720x576 [SAR 16:15 DAR 4:3], 15000 kb/s, 25 fps, 25 tbr, 90k tbn, 50 tbc
 # Stream #0:0[0x100]: Video: h264 (Main) ([27][0][0][0] / 0x001B), yuv420p, 720x576 [SAR 64:45 DAR 16:9], 25 fps, 25 tbr, 90k tbn, 50 tbc
 
+
+video="-c:v $h264enc $preset $deinterlace $scale $aspect"
+#video="-c:v libx264 $preset $scale"
 if [ "$videof" == "hevc" ]
 then
-    #preset="-preset fast -tune film -profile:v main $level -crf $crf -maxrate "$br"k -bufsize 1835k"
-    preset="-preset fast -tune film -profile:v main $level -crf $crf"
-    preset="$preset $gop"
+    if [ "$hevc" == "copy" ]
+    then
+	vcodec=hevc
+    fi
 fi
-
-video="-c:v libx264 $preset $deinterlace $scale $aspect"
-#video="-c:v libx264 $preset $scale"
+if [ "$vcodec" == "" ]
+then
+    vcodec=H264
+fi
 
 if [ "$vcodec" == "mpeg2video" ]
 then
@@ -884,7 +1357,33 @@ then
     video="-c:v mpeg2video $preset $deinterlace $scale"
     mp2=copy
 fi
-echo "preset=$preset" >> $log
+if [ "$vcodec" == "hevc" ]
+then
+    crf=28
+    if [ "$maxrate" != "no" ]
+    then
+	maxr="-maxrate "$br"k -bufsize 1835k"
+    fi
+    #preset="-preset fast -tune film -profile:v main $level -crf $crf -maxrate "$br"k -bufsize 1835k"
+    preset="-preset veryfast $level_hevc -crf $crf $maxr"
+    if [ "$hevcenc" == "hevc_nvenc" ]
+    then
+	#preset="-preset hq $level $hevcenc_b"
+	#preset="-preset hq $level_hevc -cq 21"
+	#preset="-preset hq $level_hevc -rc constqp -b 2M"
+	#preset="-preset hq $level_hevc -rc constqp -cq 21 -strict_gop 1 -forced-idr 1 -r 50"
+	#preset="-preset hq $level_hevc -rc constqp -cq 21 -strict_gop 1 -forced-idr 1"
+	preset="-preset hq $level_hevc -rc constqp -cq 21 -strict_gop 1 -forced-idr 1 -r 50 -bluray-compat 1"
+	lspci | grep VGA >> $log
+	grep "NVIDIA GPU " /var/log/Xorg.0.log >> $log
+    fi
+    preset="$preset $gop"
+    video="-c:v $hevcenc $preset $deinterlace $scale $aspect"
+    if [ "$videof" == "hevc" ]
+    then
+	video="-c:v copy"
+    fi
+fi
 
 
 if [ "$scale" == "" ]
@@ -894,13 +1393,26 @@ if [ "$videof" == "h264" ]
 then
     echo "Video schon in h264?"
     #exit
-    if [ "$vcodec" != "mpeg2video" ]
+    #if [ "$vcodec" != "mpeg2video" ]
+    if [ "$vcodec" == "H264" ]
     then
 	video="-c:v copy"
+	if [ "$h264" == "h264" ]
+	then
+	    preset="-preset fast -tune film -profile:v $h264_profile $level -crf $crf"
+	    if [ $h264enc == "h264_nvenc" ]
+	    then
+	        #preset="-preset hq -profile:v $h264_profile $level -crf $crf $nvenc_b $maxr"
+	        set_h264_nvenc
+	    fi
+	    preset="$preset $gop"
+	    video="-c:v $h264enc $preset $deinterlace $scale $aspect"
+	fi
     fi
 fi
 
 fi
+echo "preset=$preset" >> $log
 
 #cat $t
 
@@ -916,8 +1428,8 @@ then
     echo "map:" $map
     echo "audio:" $audio
     #echo "video:" $video
-    echo "Reihenfolge der Audiostreams überprüfen"
-    echo "Änderung z.B. 2,1"
+    echo "Reihenfolge der Audiostreams Ã¼berprÃ¼fen"
+    echo "Ã„nderung z.B. 2,1"
     echo "n = Abbruch"
     echo "a = autom."
     read answer
@@ -939,11 +1451,25 @@ fi
 	while read line
 	do
 	    s=$(echo $line | cut -d \  -f 2)
+	    if [ "${ac[$s]}" == "" ]
+	    then
+		continue
+	    fi
 	    audio="$audio -c:a:$is ${ac[$s]}"
 	    #audio="$audio ${au[$s]}"
 	    if [ "${ab[$s]}" != "" ]
 	    then
 		audio="$audio -b:a:$is ${ab[$s]}"
+	    fi
+	    if [ "${aach[$s]}" != "" ]
+	    then
+		audio="$audio -ac:a:$is ${aach[$s]}"
+	    fi
+	    if [ "${aaf[$s]}" != "" ]
+	    then
+		#audio="$audio -af:a:$is ${aaf[$s]}"
+		#audio="$audio -af:$is ${aaf[$s]}"
+		audio="$audio -af ${aaf[$s]}"
 	    fi
 	    lang=${al[$s]}
 	    if [ "$lang" != "" ]
@@ -954,7 +1480,8 @@ fi
 		    audio="$audio $lang"
 		fi
 	    fi
-	    map="$map -map 0:a:$(($s))"
+	    #map="$map -map 0:a:$(($s))"
+	    map="$map ${am[$s]}"
 	    is=$(($is+1))
 	    echo ${aline[$s]}
 	done < $t2
@@ -962,8 +1489,8 @@ fi
     then
 	echo "map:" $map
 	echo "audio:" $audio
-	echo "Reihenfolge der Audiostreams überprüfen"
-	echo "Änderung z.B. 2,1"
+	echo "Reihenfolge der Audiostreams Ã¼berprÃ¼fen"
+	echo "Ã„nderung z.B. 2,1"
 	echo "n = Abbruch"
 	read answer
 	if [ "$answer" == "n" ]
@@ -1006,7 +1533,7 @@ fi
 	#audio="$audio -copyts"
 	echo "map:" $map
 	echo "audio:" $audio
-	echo "Reihenfolge der Audiostreams überprüfen"
+	echo "Reihenfolge der Audiostreams Ã¼berprÃ¼fen"
 	echo "n = Abbruch"
 	read answer
 	if [ "$answer" == "n" ]
@@ -1018,27 +1545,36 @@ fi
 fi
 
 #audio="$audio -async 1"
-if [ "$v" "<" "2.0.0" ]
-then
-    audio="$audio -copyts"
-fi
+#if [ "$v" "<" "2.0.0" ]
+#then
+    audio="$audio $timestamps"
+#fi
 #exit
+
+if [ "$subtitle" == "yes" ]
+then
 
 grep "Stream" $t | grep "Subtitle" > $t2
 
 # Stream #0:5[0xe7](deu): Subtitle: dvb_subtitle ([6][0][0][0] / 0x0006) (hearing impaired)
 
-if [ "$subtitel" == "yes" ]
-then
-
-while read line
-do
+#while read line
+#do
     #echo $line
     #stream1=$(echo $line | cut -d ' ' -f 2 | cut -d ':' -f 2 | cut -d '[' -f 1)
     #map="$map -map 0:$stream1"
-    map="$map -map 0:s:0"
-    sub="-c:s copy"
-done < $t2
+    #map="$map -map 0:s:0"
+    map="$map -map 0:s?"
+    #if [ "$mkv" == "yes" ]
+    if [ "$outf" == "mkv" ]
+    then
+	#sub="-c:s srt"
+	sub="-c:s dvd_subtitle"
+    else
+	sub="-c:s copy"
+    fi
+    #leave
+#done < $t2
 
 fi
 
@@ -1048,7 +1584,7 @@ echo "video:" $video >> $log
 
 #service="-metadata service_name=\"$title\""
 service="-metadata title=\"$title\""
-ffopt="$metaf $map $video $audio $sub $test $service"
+ffopt="$metaf $map $video $audio $sub $filter $test $service"
 
 }
 
@@ -1062,7 +1598,8 @@ fi
 
 #gopt="-n"
 #gopt="$probesize $deinterlace"
-gopt="$probesize"
+#gopt="$probesize -drc_scale 0"
+gopt="$gopt $probesize"
 #gopt="$gopt -report"
 
 #if [ "$join" == "yes" ]
@@ -1161,10 +1698,11 @@ do
 	    then
 		o="00"$(basename $r .vdr).ts
 	    fi
-	    if [ "$mkv" == "yes" ]
+	    #if [ "$mkv" == "yes" ]
+	    if [ "$outf" != "" ]
 	    then
 		#o=$title-$(basename $r .vdr).mkv
-		o=$title-$(echo $r | cut -d '.' -f 1).mkv
+		o=$title-$(echo $r | cut -d '.' -f 1).$outf
 	    fi
 	    ofile=../$dest/$o
 	    if [ "$odir" != "" ]
@@ -1187,21 +1725,25 @@ then
     m=$(($ges/60-$h*60))
     s=$(($ges-$m*60-$h*3600))
     echo "Dauer $h:$m:$s" >> $log
+    date -u -d @$ges "+%T" >> $log
     #echo $(($ges / 60)) "Minuten Dauer" >> $log
     cat $flist >> $log
     filesj=" -f concat -i $flist"
     #filesj=${filesj:0:$((${#filesj}-1))}"\""
+    $ffmpeg $filesj 2> $t
+    grep "Duration:" $t >> $log
     ofile="../$dest/00001.ts"
     if [ "$split" != "" ]
     then
 	ofile="../$dest/0000%d.ts"
     fi
-    if [ "$mkv" == "yes" ]
+    #if [ "$mkv" == "yes" ]
+    if [ "$outf" != "" ]
     then
-	ofile="../$title.mkv"
+	ofile="../$title.$outf"
 	if [ "$odir" != "" ]
 	then
-	    ofile="$odir/$title.mkv"
+	    ofile="$odir/$title.$outf"
 	fi
     fi
     opt="$gopt $form $filesj $split $ffopt $ofile"
@@ -1217,20 +1759,24 @@ then
     m=$(($ges/60-$h*60))
     s=$(($ges-$m*60-$h*3600))
     echo "Dauer $h:$m:$s" >> $log
+    date -u -d @$ges "+%T" >> $log
     #echo $(($ges / 60)) "Minuten Dauer" >> $log
     #filesj=${filesj:0:$((${#filesj}-2))}"\""
     filesj=${filesj:0:$((${#filesj}-1))}
+    $ffmpeg $filesj 2> $t
+    grep "Duration:" $t >> $log
     ofile="../$dest/00001.ts"
     if [ "$split" != "" ]
     then
 	ofile="../$dest/0000%d.ts"
     fi
-    if [ "$mkv" == "yes" ]
+    #if [ "$mkv" == "yes" ]
+    if [ "$outf" != "" ]
     then
-	ofile="../$title.mkv"
+	ofile="../$title.$outf"
 	if [ "$odir" != "" ]
 	then
-	    ofile="$odir/$title.mkv"
+	    ofile="$odir/$title.$outf"
 	fi
     fi
     opt="$gopt $form $filesj $split $ffopt $ofile"
@@ -1252,12 +1798,13 @@ then
     #mencoder -of mpeg -forceidx -oac copy -ovc copy "$filej2" -o "$filej22"
     #ffmpeg -i $filej2 2>> $log
     ofile="../$dest/00001.ts"
-    if [ "$mkv" == "yes" ]
+    #if [ "$mkv" == "yes" ]
+    if [ "$outf" != "" ]
     then
-	ofile="../$title.mkv"
+	ofile="../$title.$outf"
 	if [ "$odir" != "" ]
 	then
-	    ofile="$odir/$title.mkv"
+	    ofile="$odir/$title.$outf"
 	fi
     fi
     #opt="$gopt -i $filej2 $ffopt $ofile"
@@ -1302,6 +1849,7 @@ then
     m=$(($ges/60-$h*60))
     s=$(($ges-$m*60-$h*3600))
     echo "Dauer $h:$m:$s" >> $log
+    date -u -d @$ges "+%T" >> $log
     mkdir -p $temp
     rm -f $temp/*.m1v
     rm -f $temp/*.m2v
@@ -1320,12 +1868,13 @@ then
     then
 	ofile="../$dest/0000%d.ts"
     fi
-    if [ "$mkv" == "yes" ]
+    #if [ "$mkv" == "yes" ]
+    if [ "$outf" != "" ]
     then
-	ofile="../$title.mkv"
+	ofile="../$title.$outf"
 	if [ "$odir" != "" ]
 	then
-	    ofile="$odir/$title.mkv"
+	    ofile="$odir/$title.$outf"
 	fi
     fi
     if [ "$projectxd" == "yes" ]
@@ -1455,11 +2004,13 @@ then
 		a="-c:a:$(($is-1)) $aaclib -b:a:$(($is-1)) "$br"k $l"
 		if [ "$mp2_256" == "ac3" -a $bra -ge 256 ]
 		then
-		    a="-c:a:$(($is-1)) ac3 -ac 2 -b:a:$(($is-1)) 192k $l"
+		    #a="-c:a:$(($is-1)) ac3 -ac 2 -b:a:$(($is-1)) 192k $l"
+		    a="-c:a:$(($is-1)) ac3 -ac:a:$(($is-1)) 2 -b:a:$(($is-1)) 192k $l"
 		fi
 		if [ "$mp2_256_no_ac3" == "ac3" -a $bra -ge 256 -a "$ac3_vorh" == "" ]
 		then
-		    a="-c:a:$(($is-1)) ac3 -ac 2 -b:a:$(($is-1)) 192k $l"
+		    #a="-c:a:$(($is-1)) ac3 -ac 2 -b:a:$(($is-1)) 192k $l"
+		    a="-c:a:$(($is-1)) ac3 -ac:a:$(($is-1)) 2 -b:a:$(($is-1)) 192k $l"
 		fi
 		audio="$audio $a"
 	    fi
@@ -1477,7 +2028,7 @@ then
 		#neroAacEnc -cbr 128 -if $i -of $out
 		if [ "$aac_encode" == "$aaclib" ]
 		then
-		    ffmp2opt="-i $i -c:a:0 $aaclib -b:a:0 $br"k" -copyts $out"
+		    ffmp2opt="-i $i -c:a:0 $aaclib -b:a:0 $br"k" $timestamps $out"
 		    echo $ffmpeg $ffmp2opt >> $log
 		    nice $ffmpeg $ffmp2opt &
 		    FPID="$FPID $!"
@@ -1487,7 +2038,7 @@ then
 		    wav=$temp/temp.wav
 		    #mkfifo $wav
 		    #ffmpeg -i $i -copyts -y $wav &
-		    $ffmpeg -i $i -copyts $wav
+		    $ffmpeg -i $i $timestamps $wav
 		    nbr=$(($br*1000))
 		    neroAacEnc -lc -cbr $nbr -if $wav -of $out
 		fi
@@ -1510,8 +2061,8 @@ then
 	    out=$temp/$n.264
 	    #deinterlace="-vf yadif"
 	    deinterlace="--tff"
-	    level="-level 4.0"
-	    opt="--preset fast --tune film --profile main $level --crf $crf --vbv-bufsize 1835 --vbv-maxrate $br $deinterlace -I 50"
+	    level="-level $h264_level"
+	    opt="--preset fast --tune film --profile $h264_profile $level --crf $crf --vbv-bufsize 1835 --vbv-maxrate $br $deinterlace -I 50"
 	    echo "x264: $opt" >> $log
 	    x264 $opt -o $out $fv
 	    #exit
@@ -1546,7 +2097,8 @@ then
 	    if [ "$ac3_stereo" == "ac3" -a "$atyp" == "stereo" ]
 	    then
 		br=192
-		a="-c:a:$(($is-1)) ac3 -ac 2 -b:a:$(($is-1)) "$br"k"
+		#a="-c:a:$(($is-1)) ac3 -ac 2 -b:a:$(($is-1)) "$br"k"
+		a="-c:a:$(($is-1)) ac3 -ac:a:$(($is-1)) 2 -b:a:$(($is-1)) "$br"k"
 	    fi
 	    map="$map -map $is:a:0"
 	    #audio="$audio -c:a:$(($is-1)) copy"
@@ -1558,9 +2110,10 @@ then
 	if [ "$direct" == "yes" ]
 	then
 	    file=../$dest/00001.ts
-	    if [ "$mkv" == "yes" ]
+	    #if [ "$mkv" == "yes" ]
+	    if [ "$outf" != "" ]
 	    then
-		file=../$title.mkv
+		file=../$title.$outf
 		mux=mkvmerge
 	    fi
 	else
@@ -1599,13 +2152,23 @@ then
 		    then
 			br=2000
 		    fi
-		    preset="-preset fast -tune film -profile:v main $level -crf $crf -maxrate "$br"k -bufsize 1835k"
-		    preset="$preset $gop"
-		    video="-c:v libx264 $preset $deinterlace $scale"
-		    if [ "$v" < "2.0.0" ]
+		    if [ "$maxrate" != "no" ]
 		    then
-			audio="$audio -copyts"
+			maxr="-maxrate "$br"k -bufsize 1835k"
 		    fi
+		    preset="-preset fast -tune film -profile:v $h264_profile $level -crf $crf $maxr"
+		    if [ $h264enc == "h264_nvenc" ]
+		    then
+		        #preset="-preset hq -profile:v $h264_profile -crf $crf $nvenc_b $maxr"
+		        set_h264_nvenc
+		    fi
+		    preset="$preset $gop"
+		    video="-c:v $h264enc $preset $deinterlace $scale"
+		    vcodec=H264
+		    #if [ "$v" < "2.0.0" ]
+		    #then
+			audio="$audio $timestamps"
+		    #fi
 		    wlog "video: $video"
 		    wlog "audio: $audio"
 		    ffopt="$metaf $map $video $audio $service"
@@ -1711,9 +2274,10 @@ then
     s=$(($ges-$m*60-$h*3600))
     echo "Dauer $h:$m:$s" >> $log
     ofile="../$dest/00001.ts"
-    if [ "$mkv" == "yes" ]
+    #if [ "$mkv" == "yes" ]
+    if [ "$outf" != "" ]
     then
-	ofile="../$title.mkv"
+	ofile="../$title.$outf"
     fi
     #mkdir temp
     #nice mplayer -dumpstream $filesj4
@@ -1762,7 +2326,7 @@ then
     echo "Dauer $h:$m:$s" >> $log
     #set -x
     mkdir -p $temp
-    if [ "$v" "<" "1.2.0" -o "$ffmpeg" != "ffmpeg" ]
+    if [ "$v" "<" "1.2.0" -o "$ffmpeg" == "avconv" ]
     then
     #$ffprobe -i $infile -show_streams > $t
     $ffprobe $infile -show_streams > $t
@@ -1821,7 +2385,7 @@ then
 		echo $m >> $meta
 		;;
 	    "ac3")
-		if [ "$v" "<" "1.2.0" -o "$ffmpeg" != "ffmpeg" ]
+		if [ "$v" "<" "1.2.0" -o "$ffmpeg" == "avconv" ]
 		then
 		    starta=${startar[$(($ia+1))]}
 		else
@@ -1844,7 +2408,7 @@ then
 		ia=$(($ia+1))
 		;;
 	    "mp2" | "aac")
-		if [ "$v" "<" "1.2.0" -o "$ffmpeg" != "ffmpeg" ]
+		if [ "$v" "<" "1.2.0" -o "$ffmpeg" == "avconv" ]
 		then
 		    starta=${startar[$(($ia+1))]}
 		else
@@ -1887,9 +2451,10 @@ then
     then
 	ofile="../$dest/0000%d.ts"
     fi
-    if [ "$mkv" == "yes" ]
+    #if [ "$mkv" == "yes" ]
+    if [ "$outf" != "" ]
     then
-	ofile="../$title.mkv"
+	ofile="../$title.$outf"
 	if [ "$odir" != "" ]
 	then
 	    ofile="$odir/$title.mkv"
@@ -1907,7 +2472,8 @@ fi
 #ffmpeg -i 0000%d.ts
 #ffmpeg -n -i 00001.ts -c:v libx264 -c:a copy $test ../$dest/00001.ts
 
-if [ "$mkv" != "yes" ]
+#if [ "$mkv" != "yes" ]
+if [ "$outf" == "" ]
 then
 
 cp -p $info ../$dest/info
@@ -1921,9 +2487,9 @@ then
 if [ -e info.txt ]
 then
     i=$(cat info.txt)
-    echo "$i H264" > ../$dest/info.txt
+    echo "$i $vcodec" > ../$dest/info.txt
 else
-    echo H264 > ../$dest/info.txt
+    echo $vcodec > ../$dest/info.txt
 fi
 fi
 
@@ -1951,8 +2517,17 @@ fi
 
 fi
 
+# [libx264 @ 0x955ec00] using cpu capabilities: MMX2 SSE2Fast SSSE3 SSE4.2 AVX XOP FMA4 FMA3 LZCNT BMI1
+if [ -e h264.err ]
+then
+    #grep "using cpu capabilities" h264.err >> $log
+    grep "\[libx264" h264.err >> $log
+    grep "x265 \[" h264.err >> $log
+fi
+
 o=../$dest/00001.ts
-if [ "$mkv" != "" ]
+#if [ "$mkv" != "" ]
+if [ "$outf" != "" ]
 then
     o=$ofile
 fi
@@ -1966,7 +2541,8 @@ sek=$(($ende-$start))
 min=$(($sek/60))
 echo "$min Minuten" >> $log
 #size2=$(du)
-if [ "$mkv" == "yes" ]
+#if [ "$mkv" == "yes" ]
+if [ "$outf" != "" ]
 then
     size2=$(ls -lk $ofile | cut -d \  -f 5)
     size2=$(($size2/1024))
@@ -1978,8 +2554,8 @@ comp=$(($size1*100/$size2))
 echo "vorher " $size1  >> $log
 echo "nachher" $size2  >> $log
 echo "Kompression: $comp %" >> $log
-if [ -e $h264 ]
+if [ -e $h264_k ]
 then
-    rm $h264
+    mv $h264_k h264.rdy
     rm $lock
 fi

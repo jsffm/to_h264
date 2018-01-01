@@ -5,6 +5,18 @@
 #set -x
 
 h264=h264
+run=/var/run/to_h264_server.pid
+if [ -e $run ]
+then
+    oldpid=$(cat $run)
+    if [ -e /proc/$oldpid ]
+    then
+	echo "already running"
+	exit 99
+    fi
+fi
+#PID=$(pidof $0)
+echo $$ > $run
 
 #r=$(ps -A | grep to_h264_server)
 #if [ "$r" != "" ]
@@ -48,4 +60,4 @@ while (true) do
     fi
     sleep 1m
 done
-
+rm $run

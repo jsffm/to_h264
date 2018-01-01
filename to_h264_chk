@@ -66,7 +66,7 @@ do
     typ=$(echo $line | cut -d ' ' -f 4)
     typ=${typ//,/}
     case $typ in
-	"mpeg2video" | "mpeg1video" | "h264")
+	"mpeg2video" | "mpeg1video" | "h264" | "hevc")
 	    vcodec=$typ
 	    if [ "$fmt" == "vdr" -o "$ffmpeg" == "avconv"  ]
 	    then
@@ -86,7 +86,7 @@ do
 	    r=${r//],/}
 	    echo $typ $aufl $r
 	    ;;
-	"mp2" | "aac" | "ac3" | "eac3")
+	"mp2" | "aac" | "ac3" | "eac3" | "aac_latm")
 	    id=$(echo $line | cut -d ' ' -f 2)
 	    if [ "$fmt" == "vdr" -o "$ffmpeg" == "avconv" ]
 	    then
@@ -201,11 +201,56 @@ then
 	    echo "ac3_stereo=no" >> h264
 	    ;;
 	"sd")
-	    echo "scale=\"-vf scale=720:576:interl=1\"" >> h264
+	    #echo "scale=\"-vf scale=720:576:interl=1\"" >> h264
+	    echo "scale=\"-vf scale=720:576\"" >> h264
 	    echo "ac3=\"mp2+ac3\"" >> h264
+	    ;;
+	"540p")
+	    echo "scale=\"-vf scale=960:540\"" >> h264
 	    ;;
 	"720p")
 	    echo "scale=\"-vf scale=1280:720\"" >> h264
+	    ;;
+	"h2h")
+	    echo "scale=\"-vf scale=1280:720\"" >> h264
+	    echo "eac3=aac" >> h264
+	    ;;
+	"hd43")
+	    echo "scale=\"-vf crop=iw/4*3:ih,scale=720:576\"" >> h264
+	    echo "aspect=\"-aspect 4:3\"" >> h264
+	    ;;
+	"lb")
+	    echo "scale=\"-vf crop=iw:ih-120 -aspect 16:9\"" >> h264
+	    ;;
+	"a43")
+	    echo "aspect=\"-aspect 4:3\"" >> h264
+	    ;;
+	"h264")
+	    echo "h264=h264" >> h264
+	    #echo "maxrate=no" >> h264
+	    ;;
+	"hevc")
+	    echo "vcodec=hevc" >> h264
+	    #echo "ac3=eac3" >> h264
+	    ;;
+	"stn")
+	    echo "subtitle=no" >> h264
+	    ;;
+	"nv")
+	    echo "h264enc=nvenc_h264" >> h264
+	    ;;
+	"x264")
+	    echo "h264enc=libx264" >> h264
+	    ;;
+	"oly")
+	    echo "ac3=aac" >> h264
+	    echo "mkv=yes" >> h264
+	    ;;
+	"badgop")
+	    echo "vcodec=mpeg2video" >> h264
+	    echo "mp2=copy" >> h264
+	    echo "gop=\"-g 10\"" >> h264
+	    echo "mpeg2_q=\"-q 4\"" >> h264
 	    ;;
 	"?")
 	    echo "s wie voreingestellt"
@@ -219,8 +264,13 @@ then
 	    echo "s3 ac3_stereo=ac3"
 	    echo "sc ac3_stereo=aac"
 	    echo "sn ac3_stereo=no"
-	    echo "sd scale=\"-vf scale=720:576:interl=1\""
-	    echo "720p scale=\"-vf scale=1280:720\""
+	    echo "sd -vf scale=720:576"
+	    echo "stn subtitle=no"
+	    echo "720p -vf scale=1280:720"
+	    echo "540p -vf scale=960:540"
+	    echo "hd43 -vf crop=iw/4*3:ih,scale=720:576 -aspect 4:3"
+	    echo "h264 h264=h264"
+	    echo "nv nvenc_h264"
 	    echo "gnn gop="
 	    ;;
 	*)
