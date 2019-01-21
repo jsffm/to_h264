@@ -10,6 +10,19 @@ then
     cd $1
 fi
 
+word_before() {
+    erg1=${1%%$2*}
+    nw=$(echo $erg1|wc -w)
+    erg=$(echo $erg1|cut -d \  -f $nw)
+    echo $erg
+}
+
+word_after() {
+    erg1=${1##*$2}
+    erg=$(echo $erg1|cut -d \  -f 1)
+    echo $erg
+}
+
 which avconv 2> /dev/null
 if [ $? -eq 0 ]
 then
@@ -60,6 +73,8 @@ $ffprobe $1 2>&1 | grep "Stream" > $t
 # Stream #0:1[0x232](deu): Audio: mp2 ([4][0][0][0] / 0x0004), 48000 Hz, stereo, s16, 192 kb/s
 # Stream #0:0[0x100]: Video: h264 (Main) ([27][0][0][0] / 0x001B), yuv420p, 720x576 [SAR 64:45 DAR 16:9], 25 fps, 25 tbr, 90k tbn, 50 tbc
 # Stream #0:1[0x101]: Audio: aac ([15][0][0][0] / 0x000F), 48000 Hz, stereo, s16, 118 kb/s
+# Stream '#0:0[0xff]:' Video: h264 '(High)' '([27][0][0][0]' / '0x001B),' 'yuv420p(top' 'first),' 1920x1080 '[SAR' 1:1 DAR '16:9],' 25 fps, 25 tbr, 90k tbn, 50 tbc
+# Stream #0:0[0x1ff]: Video: h264 (High) ([27][0][0][0] / 0x001B), yuv420p(tv, bt709, top first), 1440x1080 [SAR 4:3 DAR 16:9], 25 fps, 50 tbr, 90k tbn, 50 tbc
 while read line
 do
     #echo $line
@@ -67,6 +82,7 @@ do
     typ=${typ//,/}
     case $typ in
 	"mpeg2video" | "mpeg1video" | "h264" | "hevc")
+	    #set -x
 	    vcodec=$typ
 	    if [ "$fmt" == "vdr" -o "$ffmpeg" == "avconv"  ]
 	    then
@@ -81,10 +97,18 @@ do
 		iaufl=10
 		ir=14
 	    fi
-	    aufl=$(echo $line | cut -d ' ' -f $iaufl)
-	    r=$(echo $line | cut -d ' ' -f $ir)
+	    #aufl=$(echo $line | cut -d ' ' -f $iaufl)
+	    aufl1=$(echo $line|cut -d ',' -f 3) # ' 1920x1080 [SAR 1:1 DAR 16:9]'
+	    aufl=$(echo $aufl1 | cut -d ' ' -f 1)
+	    aufl=$(word_before "$line" "[SAR")
+	    #r=$(echo $line | cut -d ' ' -f $ir)
+	    #r=${r//],/}
+	    #r=$(echo $aufl1 | cut -d ' ' -f 5)
+	    #r=${r//]/}
+	    r=$(word_after "$line" " DAR ")
 	    r=${r//],/}
 	    echo $typ $aufl $r
+	    #set +x
 	    ;;
 	"mp2" | "aac" | "ac3" | "eac3" | "aac_latm")
 	    id=$(echo $line | cut -d ' ' -f 2)
@@ -101,9 +125,11 @@ do
 		    lang=""
 		fi
 	    fi
-	    atyp=$(echo $line | cut -d ' ' -f $ityp)
+	    #atyp=$(echo $line | cut -d ' ' -f $ityp)
+	    atyp=$(word_after "$line" "*Hz,")
 	    atyp=${atyp//,/}
-	    br=$(echo $line | cut -d ' ' -f $ibr)
+	    #br=$(echo $line | cut -d ' ' -f $ibr)
+	    br=$(word_before "$line" " kb/s")
 	    #echo $id $lang $typ $atyp $br "kb/s"
 	    echo $id $typ $atyp $br "kb/s"
 	    ;;
@@ -123,7 +149,7 @@ echo "$nfiles Datei(en)"
 
 for r in $infiles
 do
-    echo $r
+    #echo $r
     chk $r
     if [ "$fmt" == "ts" ]
     then
@@ -191,14 +217,23 @@ then
 	"mc")
 	    echo "mp2=copy" >> h264
 	    ;;
+	"m6")
+	    echo "mp2=ac3-6" >> h264
+	    ;;
 	"s3")
 	    echo "ac3_stereo=ac3" >> h264
+	    ;;
+	"s6")
+	    echo "ac3_stereo=ac3-6" >> h264
 	    ;;
 	"sc")
 	    echo "ac3_stereo=aac" >> h264
 	    ;;
 	"sn")
 	    echo "ac3_stereo=no" >> h264
+	    ;;
+	"e")
+	    echo "ac3=eac3" >> h264
 	    ;;
 	"sd")
 	    #echo "scale=\"-vf scale=720:576:interl=1\"" >> h264
@@ -229,9 +264,13 @@ then
 	    echo "h264=h264" >> h264
 	    #echo "maxrate=no" >> h264
 	    ;;
-	"hevc")
+	"hevc"|"h")
 	    echo "vcodec=hevc" >> h264
 	    #echo "ac3=eac3" >> h264
+	    ;;
+	"hevce"|"he")
+	    echo "vcodec=hevc" >> h264
+	    echo "ac3=eac3" >> h264
 	    ;;
 	"stn")
 	    echo "subtitle=no" >> h264

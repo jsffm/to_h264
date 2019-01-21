@@ -2,6 +2,8 @@
 
 # to_h264						jsffm@web.de
 
+# http://www.vdr-wiki.de/wiki/index.php/To_h264
+
 # Funktioniert mit .vdr und .ts
 #
 # Ziel wird in .rec Ordner + 1 gespeichert
@@ -41,6 +43,7 @@ hevc_level=4.0
 nvenc_b_HD="-b:v 5M"
 hevcenc=libx265
 hevcenc_b="-b:v 2M"
+hevc_cq=21
 
 #set -x
 if [ -e /etc/to_h264.conf ]
@@ -523,11 +526,11 @@ d=$(basename $PWD)
 #    d2=0$d2
 #fi
 #set -x
-#dd=${d:0:10}
+dd1=${d:0:10}
 dd=${d:0:16}
-#dh=${d:11:2}
-#dm=${d:14:2}
-#s=$(date -u "+%s" -d "$dd $dh:$dm")
+dh=${d:11:2}
+dm=${d:14:2}
+rec_time=$(date "+%s" -d "$dd1 $dh:$dm")
 #s=$(($s+60))
 #dd2=$(date -u "+%F.%H.%M" -d @$s)
 d3=$(echo $d | cut -d '.' -f 4-)
@@ -585,6 +588,7 @@ then
     if [ "$odir" != "" ]
     then
 	dest="$odir"
+	mkdir -p $odir
     fi
     #subtitle=no
     # Chapter
@@ -765,6 +769,8 @@ fi
 if [ "$scantype" == "Progressive" ]
 then
     deinterlace=
+else
+    opt_r="-r 50"
 fi
 echo "deinterlace=$deinterlace" >> $log
 #exit
@@ -787,16 +793,24 @@ rm $logt
 
 d2=$(dirname $PWD)
 title=$(basename $d2)
+if [ "$title" == "_" ]
+then
+    d2=$(dirname $d2)
+    title=$(basename $d2)
+fi
 if [ ${title:0:1} == "%" ]
 then
       title=${title:1}
+fi
+if [ "$fname" != "" ]
+then
+    title=$fname
 fi
 #exit
 
 #info=$(ffmpeg -i 00001.ts | grep "Stream" | grep "Audio")
 #cp $t $log
 cat $t >> $log
-
 
 aac_br() {
     br=$aac_br2
@@ -807,6 +821,54 @@ aac_br() {
     if [ $1 -lt 160 ]
     then
 	br=$aac_br1
+    fi
+}
+
+set_h264_nvenc()
+{
+    #preset="-profile:v $h264_profile -b:v 1500k -crf $crf"
+    nvenc_b=
+    #preset="-preset hq -profile:v $h264_profile $level -cq $crf $nvenc_b $maxr $opt_r"
+    preset="-preset hq -profile:v $h264_profile $level -cq $crf $nvenc_b $maxr"
+    lspci | grep VGA >> $log
+    grep "NVIDIA GPU " /var/log/Xorg.0.log >> $log
+}
+
+set_libx264()
+{
+    preset="-preset fast -tune film -profile:v $h264_profile $level -crf $crf $maxr"
+    if [ $h264enc == "libx264" ]
+    then
+	preset="$preset $x264opts"
+    fi
+}
+
+set_hevc() {
+    crf=28
+    if [ "$maxrate" != "no" ]
+    then
+	maxr="-maxrate "$br"k -bufsize 1835k"
+    fi
+    #preset="-preset fast -tune film -profile:v main $level -crf $crf -maxrate "$br"k -bufsize 1835k"
+    preset="-preset veryfast $level_hevc -crf $crf $maxr"
+    if [ "$hevcenc" == "hevc_nvenc" ]
+    then
+	#preset="-preset hq $level $hevcenc_b"
+	#preset="-preset hq $level_hevc -cq 21"
+	#preset="-preset hq $level_hevc -rc constqp -b 2M"
+	#preset="-preset hq $level_hevc -rc constqp -cq 21 -strict_gop 1 -forced-idr 1 -r 50"
+	#preset="-preset hq $level_hevc -rc constqp -cq 21 -strict_gop 1 -forced-idr 1"
+	#preset="-preset hq $level_hevc -rc constqp -cq 21 -strict_gop 1 -forced-idr 1 -r 50 -bluray-compat 1"
+	#preset="-preset hq $level_hevc -rc vbr -cq 21 -r 50"
+	preset="-preset hq $level_hevc -rc vbr -cq $hevc_cq $opt_r"
+	lspci | grep VGA >> $log
+	grep "NVIDIA GPU " /var/log/Xorg.0.log >> $log
+    fi
+    preset="$preset $gop"
+    video="-c:v $hevcenc $preset $deinterlace $scale $aspect"
+    if [ "$videof" == "hevc" -a "$scale" == "" ]
+    then
+	video="-c:v copy"
     fi
 }
 
@@ -1003,12 +1065,23 @@ do
 	    if [ "$atyp" != "stereo" ]
 	    then
 		echo $codec $atyp >> $log
-		#br=256
-		#a="-c:a:$ostream eac3 -b:a:$ostream "$br"k"
-		#c=eac3
+		br=256
+		a="-c:a:$ostream eac3 -b:a:$ostream "$br"k"
+		c=eac3
+		#br=448
+		#a="-c:a:$ostream ac3 -b:a:$ostream "$br"k"
+		#c=ac3
+	    fi
+	    if [ "$aac" == "ac3-6" ]
+	    then
 		br=448
-		a="-c:a:$ostream ac3 -b:a:$ostream "$br"k"
-		c=ac3
+		a="-c:a:$ostream ac3 -ac:a:$ostream 6 -b:a:$ostream "$br"k"
+		c="ac3"
+		#br=256
+		#a="-c:a:$ostream eac3 -ac:a:$ostream 6 -b:a:$ostream "$br"k"
+		#c="eac3"
+		ch=6
+		#kenn=$(($kenn+100))
 	    fi
 	    ;;
 	"eac3")
@@ -1088,11 +1161,14 @@ do
 			fi
 			;;
 		    "ac3-6")
-			br=448
-			a="-c:a:$ostream ac3 -ac:a:$ostream 6 -b:a:$ostream "$br"k"
-			#c="ac3 -ac 6"
-			c="ac3"
-			ch=6
+			if [ $bra -gt 192 ]
+			then
+			    br=448
+			    a="-c:a:$ostream ac3 -ac:a:$ostream 6 -b:a:$ostream "$br"k"
+			    #c="ac3 -ac 6"
+			    c="ac3"
+			    ch=6
+			fi
 			;;
 		esac
 	    fi
@@ -1145,7 +1221,9 @@ do
 	    then
 		br=256
 		a="-c:a:$ostream eac3 -b:a:$ostream "$br"k"
-		c=eac3
+		#c=eac3
+		c="eac3 -channel_coupling 0"
+		ch=6
 	    fi
 	    if [ "$ac3" == "mp2" ]
 	    then
@@ -1249,8 +1327,13 @@ hw=$(echo $hw|cut -d 'x' -f 1)
 videof=$(echo $videof | cut -d ' ' -f 4)
 if [ "$scale" != "" ]
 then
+    hws=$hw
     hw1=${scale##*scale=}
     hw=$(echo $hw1|cut -d ':' -f 1)
+    if [ "$hw" == "iw" ]
+    then
+	hw=$hws
+    fi
 fi
 if [ $hw -gt 720 ]
 then
@@ -1303,16 +1386,7 @@ then
     #exit
 fi
 
-set_h264_nvenc()
-{
-    #preset="-profile:v $h264_profile -b:v 1500k -crf $crf"
-    nvenc_b=
-    preset="-preset hq -profile:v $h264_profile $level -cq $crf $nvenc_b $maxr"
-    lspci | grep VGA >> $log
-    grep "NVIDIA GPU " /var/log/Xorg.0.log >> $log
-}
-
-preset="-preset fast -tune film -profile:v $h264_profile $level -crf $crf $maxr"
+set_libx264
 if [ "$videof" == "hevc" ]
 then
     #preset="-preset fast -tune film -profile:v main $level -crf $crf -maxrate "$br"k -bufsize 1835k"
@@ -1357,32 +1431,11 @@ then
     video="-c:v mpeg2video $preset $deinterlace $scale"
     mp2=copy
 fi
+
+
 if [ "$vcodec" == "hevc" ]
 then
-    crf=28
-    if [ "$maxrate" != "no" ]
-    then
-	maxr="-maxrate "$br"k -bufsize 1835k"
-    fi
-    #preset="-preset fast -tune film -profile:v main $level -crf $crf -maxrate "$br"k -bufsize 1835k"
-    preset="-preset veryfast $level_hevc -crf $crf $maxr"
-    if [ "$hevcenc" == "hevc_nvenc" ]
-    then
-	#preset="-preset hq $level $hevcenc_b"
-	#preset="-preset hq $level_hevc -cq 21"
-	#preset="-preset hq $level_hevc -rc constqp -b 2M"
-	#preset="-preset hq $level_hevc -rc constqp -cq 21 -strict_gop 1 -forced-idr 1 -r 50"
-	#preset="-preset hq $level_hevc -rc constqp -cq 21 -strict_gop 1 -forced-idr 1"
-	preset="-preset hq $level_hevc -rc constqp -cq 21 -strict_gop 1 -forced-idr 1 -r 50 -bluray-compat 1"
-	lspci | grep VGA >> $log
-	grep "NVIDIA GPU " /var/log/Xorg.0.log >> $log
-    fi
-    preset="$preset $gop"
-    video="-c:v $hevcenc $preset $deinterlace $scale $aspect"
-    if [ "$videof" == "hevc" ]
-    then
-	video="-c:v copy"
-    fi
+    set_hevc
 fi
 
 
@@ -1399,7 +1452,8 @@ then
 	video="-c:v copy"
 	if [ "$h264" == "h264" ]
 	then
-	    preset="-preset fast -tune film -profile:v $h264_profile $level -crf $crf"
+	    #preset="-preset fast -tune film -profile:v $h264_profile $level -crf $crf"
+	    set_libx264
 	    if [ $h264enc == "h264_nvenc" ]
 	    then
 	        #preset="-preset hq -profile:v $h264_profile $level -crf $crf $nvenc_b $maxr"
@@ -1703,6 +1757,10 @@ do
 	    then
 		#o=$title-$(basename $r .vdr).mkv
 		o=$title-$(echo $r | cut -d '.' -f 1).$outf
+		if [ "$fname" != "" ]
+		then
+		    o=$fname.$outf
+		fi
 	    fi
 	    ofile=../$dest/$o
 	    if [ "$odir" != "" ]
@@ -2138,12 +2196,16 @@ then
 		mkvmerge -o $file $fv $fmp2 $fac3 --timecode-scale -1
 		;;
 	    ffmpeg)
-		#else
+		#set -x
 		direct=yes
 		files="-i $fv $f2mp2 $f2ac3"
 		if [ "$direct" == "yes" ]
 		then
+		    #if [ 0 -eq 1 ]
+		    #then
 		    #map="map 0:v:0"
+		    if [ "$vcodec" == "h264" -o "$vcodec" == "" ]
+		    then
 		    #br=2000
 		    bra=$(grep "avg. nom. bitrate" $plog | cut -d \  -f 5)
 		    bra=${bra//bps/}
@@ -2164,10 +2226,17 @@ then
 		    fi
 		    preset="$preset $gop"
 		    video="-c:v $h264enc $preset $deinterlace $scale"
-		    vcodec=H264
+		    fi
+		    if [ "$vcodec" == "hevc" ]
+		    then
+			set_hevc
+			#video="-c:v $hevcenc $preset $deinterlace $scale"
+		    fi
+		    #vcodec=H264
 		    #if [ "$v" < "2.0.0" ]
 		    #then
 			audio="$audio $timestamps"
+		    #fi
 		    #fi
 		    wlog "video: $video"
 		    wlog "audio: $audio"
@@ -2189,6 +2258,7 @@ then
 		fi
 		opt="$files $ffopt $file"
 		wlog "$ffmpeg $opt"
+		#exit
 		$ffmpeg $opt
 		#ffmpeg $opt 2>&1 | tee > $logf
 		;;
@@ -2497,6 +2567,11 @@ if [ -e logfile ]
 then
     cp -p logfile ../$dest/logfile1
 fi
+if [ -e logfile1 ]
+then
+    fd=$(date -r logfile1 "+%Y%m%d%H%M")
+    cp -p logfile1 ../$dest/logfile".$fd"
+fi
 
 #set -x
 #cd ../$dest
@@ -2516,6 +2591,10 @@ then
 fi
 
 fi
+if [ "$fname" != "" -a "$odir" != "" ]
+then
+    cp -p $info $odir/info
+fi
 
 # [libx264 @ 0x955ec00] using cpu capabilities: MMX2 SSE2Fast SSSE3 SSE4.2 AVX XOP FMA4 FMA3 LZCNT BMI1
 if [ -e h264.err ]
@@ -2523,6 +2602,7 @@ then
     #grep "using cpu capabilities" h264.err >> $log
     grep "\[libx264" h264.err >> $log
     grep "x265 \[" h264.err >> $log
+    grep "decoding errors" h264.err >> $log
 fi
 
 o=../$dest/00001.ts
@@ -2530,6 +2610,7 @@ o=../$dest/00001.ts
 if [ "$outf" != "" ]
 then
     o=$ofile
+    touch -d @$rec_time $o
 fi
 $ffmpeg -i $o 2>> $log
 

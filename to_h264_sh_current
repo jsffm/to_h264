@@ -2,14 +2,25 @@
 
 # Show current Status
 
-# -s	Snapshot
+# -c	Check
+# -l	Log
 # -q	Queue
+# -r	Ready
+# -s	Snapshot
+# -t	tail logfile
+# -x	exit server
 
 #set -x
 
 c=$(tail -n 1 /var/log/h264 | cut -d \  -f 3-)
 l=$c/h264.err
-
+info=$c/info
+index=index
+if [ -e $c/info.vdr ]
+then
+    info=$c/info.vdr
+    index=index.vdr
+fi
 
 #pause
 #echo "Press Enter"
@@ -18,6 +29,75 @@ l=$c/h264.err
 #exit
 
 case $1 in
+    "-?"|"-h")
+	echo "ffmpeg log"
+	echo "-c Check"
+	echo "-l Log"
+	echo "-q Queue"
+	echo "-r Ready"
+	echo "-s Snapshot"
+	echo "-t tail logfile"
+	echo "-x exit server"
+	;;
+    "-c")
+	#set -x
+	t=/tmp/h264r
+	tac /var/log/h264 > $t
+	while read line
+	do
+	    c=$(echo $line | cut -d \  -f 3-)
+	    if [ ! -e $c ]
+	    then
+		exit
+		#continue
+	    fi
+	    echo $line
+	    if [ -e $c/h264.lck ]
+	    then
+		continue
+	    fi
+	    info=$c/info
+	    index=index
+	    if [ -e $c/info.vdr ]
+	    then
+		info=$c/info.vdr
+		index=index.vdr
+	    fi
+	    if [ ! -e $c/h264.err ]
+	    then
+		continue
+	    fi
+	    se=$(ls -lk $c/h264.err|cut -d \  -f 5)
+	    # -rw-r--r-- 1 root root 36354 17. Dez 13:55 h264.err
+	    if [ $se -gt 1000000 ]
+	    then
+		echo -e "\e[91mSize h264.err $se\e[0m"
+	    fi
+	    c2=$(grep Output $c/h264.err | head -n 1 | cut -d '/' -f 2)
+	    #c2=$(grep -v "^frame=" $c/h264.err | grep Output | head -n 1 | cut -d '/' -f 2)
+	    if [ "$c2" == "" ]
+	    then
+		#exit
+		continue
+	    fi
+	    c2=$(dirname $c)/$c2
+	    if [ ! -e "$c2" ]
+	    then
+		#exit
+		continue
+	    fi
+	    # -rw-r--r-- 1 2001 users 584096 13. Okt 2015  /6TB/video/Archive/Serien/Prófugos_-_Auf_der_Flucht/S01E09_Irmas_Rache/2015-10-13.03.01.504-0.rec/index
+	    l=$(ls -l $c/$index|cut -d \  -f 5)
+	    echo "index="$l
+	    l=$(ls -l $c2/index|cut -d \  -f 5)
+	    echo "index="$l
+	    grep "Duration:" $c/h264.err
+	    grep "Duration:" $c2/logfile | tail -n 1
+	    tail -n 3 $c2/logfile
+	    #exit
+	done < $t
+	rm $t
+	;;
     "-s")
 	if [ ! -e $l ]
 	then
@@ -25,7 +105,8 @@ case $1 in
 	fi
 	echo $c
 	#set -x
-	d=$(grep "Duration:" $l)
+	#d=$(grep "Duration:" $l)
+	d=$(grep -a "Duration:" $l | tail -n 1)
 	d2=$(echo $d | cut -d \  -f 2)
 	echo "Duration: $d2"
 	dur1=$(date +"%s" -d ${d2:0:8})
@@ -35,8 +116,10 @@ case $1 in
 	#temp=/tmp/h264.err
 	#tr '\r' '\n' < $l > $temp
 	#t=$(tail -n 1 $temp)
-	t=$(tr '\r' '\n' < $l | tail -n 1)
+	#t=$(tr '\r' '\n' < $l | tail -n 1)
+	t=$(tr '\r' '\n' < $l | grep -a "^frame=" | tail -n 1)
 	# frame=14306 fps= 42 q=30.0 size=   90023kB time=00:09:31.81 bitrate=1289.7kbits/s dup=24 drop=0
+	# frame=65000 fps= 58 q=26.0 00000000000000000000000543B88654size=  505267kB time=00:43:19.25 bitrate=1592.4kbits/s
 	#echo $t
 
 	#fps=${t:16:3}
@@ -45,15 +128,104 @@ case $1 in
 	#time=${t:48:11}
 	time=${t##*time=}
 	time=$(echo $time | cut -d \  -f 1)
+	size2=${t##*size=}
+	size2=$(echo $size2 | cut -d \  -f 1)
+	if [ "$size2" == "N/A" ]
+	then
+	    size2="100"
+	fi
+	n=${#size2}
+	size2=${size2:0:$(($n-2))}
+	#echo $size2
 	t1=$(date +"%s" -d ${time:0:8})
 	t2=$(($t1-$b))
 	prz=$(($t2*100/$dur))
 	#date "+%T" -d @$dur
+	if [ -e $info ]
+	then
+	    f=$(grep -a "^F" $info | cut -d ' ' -f 2)
+	fi
+	if [ "$f" == "" ]
+	then
+	    f=25
+	fi
+	#echo "f=$f"
 	restz=$(($dur-$t2))
-	restz2=$(($restz*25/$fps))
-	echo "fps=$fps time=$time $prz%"
+	fpso=$fps
+	if [[ "$fps" == *.* ]]
+	then
+	    fps=${fps//./}
+	    restz2=$(($restz*$f/$fps*10))
+	else
+	    #restz2=$(($restz*25/$fps))
+	    #restz2=$(($restz*$fps/25))
+	    #restz2=$(echo $restz*25/$fps | bc)
+	    restz2=$(($restz*$f/$fps))
+	fi
+	temp=/tmp/h264_sh
+	if [ -e $c/00001.ts ]
+	then
+	    m="$c/*.ts"
+	fi
+	if [ -e $c/001.vdr ]
+	then
+	    m="$c/*.vdr"
+	fi
+	#set -x
+	#ls -l $m > $temp
+	#size1=0
+	#while read line
+	#do
+	#    s=$(echo $line|cut -d \  -f 5)
+	#    size1=$(($size1+$s))
+	#done < $temp
+	#set -x
+	size1=0
+	for r in $m
+	do
+	    #echo $r
+	    l=$(ls -l $r)
+	    if [ -h $r ]
+	    then
+		#echo $l
+		# lrwxrwxrwx 1 root root 77 5. Dez 2014 /video0/The_Voice_of_Germany/Musik-Show,_D/2014-12-05.20.09.14-0.rec/00001.ts -> /video1/The_Voice_of_Germany/Musik-Show,_D/2014-12-05.20.09.14-0.rec/00001.ts
+		r2=$(echo $l|cut -d \  -f 11-)
+		l2=$(ls -l $r2)
+		s=$(echo $l2|cut -d \  -f 5)
+	    else
+		#echo $l
+		# -rw-r--r-- 1 root root 1497016364 5. Dez 2014 /video0/The_Voice_of_Germany/Musik-Show,_D/2014-12-05.20.09.14-0.rec/00002.ts
+		s=$(echo $l|cut -d \  -f 5)
+	    fi
+	    size1=$(($size1+$s))
+	done
+	size1=$(($size1/1024))
+	#exit
+	comp=$(($size1*$prz/$size2))
+	#echo $size1
+	echo "fps=$fpso time=$time $prz% Comp=$comp%"
+	if [ $prz -gt 0 ]
+	then
+	    sizen=$(($size2*100/$prz))
+	    echo "Size: $size1 -> $sizen"
+	fi
 	echo -n "Est: "
 	date "+%T" -u -d @$restz2
+	    se=$(ls -lk $c/h264.err|cut -d \  -f 5)
+	    # -rw-r--r-- 1 root root 36354 17. Dez 13:55 h264.err
+	    if [ $se -gt 1000000 ]
+	    then
+		echo -e "\e[91mSize h264.err $se\e[0m"
+	    fi
+	if [[ "$t" == *"dup="* ]]
+	then
+	    #echo $t
+	    dup=${t##*dup=}
+	    dup=$(echo $dup | cut -d \  -f 1)
+	    drop=${t##*drop=}
+	    drop=$(echo $drop | cut -d \  -f 1)
+	    echo "dup=$dup drop=$drop"
+	fi
 	;;
 
     "-q")
@@ -65,17 +237,84 @@ case $1 in
 	    if [ -e $line ]
 	    then
 		echo $line
-		find $line -name h264
+		for ih in $(find $line -name h264)
+		do
+		    status=""
+		    l=$(dirname $ih)/h264.lck
+		    #echo $l
+		    if [ -e $l ]
+		    then
+			status="*"
+		    fi
+		    echo "$ih $status"
+		done
 	    fi
 	done < $conf
 	;;
+
+    "-r")
+	#set -x
+	wo=$(which to_h264_server)
+	conf=$wo.conf
+	while read line
+	do
+	    if [ -e $line ]
+	    then
+		echo $line
+		for ih in $(find $line -name h264.rdy)
+		do
+		    #echo "$ih"
+		    c=$(dirname $ih)
+		    if [ -e $c/h264.err ]
+		    then
+			c2=$(grep Output $c/h264.err | head -n 1 | cut -d '/' -f 2)
+			#c2=$(grep -v "^frame=" $c/h264.err | grep Output | head -n 1 | cut -d '/' -f 2)
+			if [ "$c2" != "" ]
+			then
+			    c2=$(dirname $c)/$c2
+			    if [ -e "$c2" ]
+			    then
+				echo "$c"
+				echo $c2
+			    fi
+			fi
+		    fi
+		done
+	    fi
+	done < $conf
+	;;
+
+    "-l")
+	tail -f /var/log/h264
+	;;
+
+    "-t")
+	# Output #0, mpegts, to '../2011-01-15.21.56.1-0.rec/00001.ts':
+	#set -x
+	c2=$(grep Output $l | cut -d '/' -f 2)
+	c2=$(dirname $c)/$c2
+	tail $c2/logfile
+	;;
+
+    "-x")
+	run=/var/run/to_h264_server.pid
+	if [ -e $run ]
+	then
+	    pid=$(cat $run)
+	    kill -15 $pid
+	else
+	    echo "not running"
+	fi
+	;;
+
 
     *)
 	if [ ! -e $l ]
 	then
 	    exit
 	fi
-	tail -f $l
+	#tail -f $l
+	#tail -f $l | grep -a "frame="
+	tail -f $l | tr '\r' '\n'| grep "^frame="
 	;;
 esac
-
