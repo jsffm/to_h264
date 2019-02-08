@@ -33,6 +33,8 @@
 
 # Schalter sind nach to_h264.conf verlagert, hier nichts ändern!
 
+# concat: filesj -> files_concat
+
 #set -x
 
 #mpeg2_q="-q 5"
@@ -887,10 +889,10 @@ $ffmpeg -i $1 2> $t
 dur=$(grep "Duration:" $t)
 #echo $dur
 for i in $dur
-    do
-        #echo $i
-        if [ "$i" == "kb/s" ]
-        then
+do
+    #echo $i
+    if [ "$i" == "kb/s" ]
+    then
         break
     fi
     brv=$i
@@ -1073,7 +1075,7 @@ do
 		a="-c:a:$ostream $aaclib -b:a:$ostream "$br"k"
 		c=$aaclib
 	    fi
-	    if [ "$atyp" != "stereo" ]
+	    if [ "$atyp" != "stereo" -a "$aac-6" == "eac3" ]
 	    then
 		echo $codec $atyp >> $log
 		br=256
@@ -1679,10 +1681,12 @@ if [ "$join" == "concat" ]
 then
     #filesj="-i concat:\""
     filesj="-i concat:"
+    files_concat="concat:"
     #filesj="concat:\""
 fi
 
 ges=0
+del=""
 
 for r in $w
 do
@@ -1712,6 +1716,8 @@ do
 	concat)
 	    #filesj="$filesj$r\\|"
 	    filesj="$filesj$r|"
+	    files_concat=$files_concat$del$r
+	    del="|"
 	    ;;
 	cat)
 	    #if [ "$join2" == "yes" ]
@@ -1758,6 +1764,7 @@ do
 	    fi
 	    ;;
 	*)
+	    #set -x
 	    o=$r
 	    if [ "$fmt" == "vdr" ]
 	    then
@@ -1780,10 +1787,15 @@ do
 	    fi
 	    opt="$gopt $form $files $ffopt $ofile"
 	    echo $ffmpeg $opt >> $log
+	    $ffmpeg -i $r 2> $t
+	    #grep "Duration:" $t >> $log
+	    dur=$(grep "Duration:" $t)
+	    dur2=$(echo $dur|cut -d \  -f 2)
+	    dur2=${dur2:0:8}
+	    durs=$(date -u "+%s" -d "1970-01-01 $dur2")
+	    #exit
 	    nice $ffmpeg $opt
 	    #nice ffmpeg $opt 2>&1 | tee > $logf
-	    $ffmpeg -i $o2 2> $t
-	    grep "Duration:" $t >> $log
 	    ;;
     esac
     done
@@ -1827,13 +1839,27 @@ then
     h=$(($ges/3600))
     m=$(($ges/60-$h*60))
     s=$(($ges-$m*60-$h*3600))
-    echo "Dauer $h:$m:$s" >> $log
+    #echo "Dauer $h:$m:$s" >> $log
+    echo -n "Dauer: " >> $log
     date -u -d @$ges "+%T" >> $log
     #echo $(($ges / 60)) "Minuten Dauer" >> $log
     #filesj=${filesj:0:$((${#filesj}-2))}"\""
     filesj=${filesj:0:$((${#filesj}-1))}
-    $ffmpeg $filesj 2> $t
-    grep "Duration:" $t >> $log
+    #echo $filesj
+    #echo $files_concat
+    #exit
+    #$ffmpeg $filesj 2> $t
+    $ffmpeg -i $files_concat 2> $t
+    #grep "Duration:" $t >> $log
+    #set -x
+    dur=$(grep "Duration:" $t)
+    # Duration: 01:45:57.16, start: 63761.446167, bitrate: 6854 kb/s
+    echo $dur >> $log
+    dur2=$(echo $dur|cut -d \  -f 2)
+    dur2=${dur2:0:8}
+    durs=$(date -u "+%s" -d "1970-01-01 $dur2")
+    #date -u -d @$durs "+%T"
+    #exit
     ofile="../$dest/00001.ts"
     if [ "$split" != "" ]
     then
@@ -1848,7 +1874,8 @@ then
 	    ofile="$odir/$title.$outf"
 	fi
     fi
-    opt="$gopt $form $filesj $split $ffopt $ofile"
+    #opt="$gopt $form $filesj $split $ffopt $ofile"
+    opt="$gopt $form -i $files_concat $split $ffopt $ofile"
     echo $ffmpeg $opt >> $log
     nice $ffmpeg $opt
     #nice ffmpeg $opt 2>&1 | tee > $logf
@@ -2614,6 +2641,7 @@ then
     grep "\[libx264" h264.err >> $log
     grep "x265 \[" h264.err >> $log
     grep "decoding errors" h264.err >> $log
+    grep "video:" h264.err >> $log
 fi
 
 o=../$dest/00001.ts
