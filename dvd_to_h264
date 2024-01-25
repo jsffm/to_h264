@@ -1,0 +1,1110 @@
+#!/bin/bash
+
+#set -x
+
+# dvd_to_h264						jsffm@web.de
+
+#mkv=yes
+#outf=
+
+#profile="-profile:v main -level 4.0"
+profile="-profile:v high -level 3.0"
+
+#crop="-vf \"cropdetect=24:16:0\""
+#crop="-vf crop=720:456:0:56"
+#crop="-vf crop=720:564:0:8"
+#crop="-vf crop=720:456:0:56 -aspect 16:9" # LB -> 16:9
+#crop="-vf crop=704:456:0:56 -aspect 16:9" # LB -> 16:9
+#crop="-vf crop=480:456:0:56 -aspect 16:9"
+#crop="-vf crop=352:456:0:56 -aspect 16:9"
+#crop="-vf crop=528:512:8:52 -aspect 16:9"
+#crop="-vf crop=iw:ih-120 -aspect 16:9" # LB -> 16:9
+#crop="-vf crop=iw:ih-110 -aspect 16:9" # LB -> 16:9 ?
+#crop="-vf crop=iw:ih-90 -aspect 16:9"
+#crop="-vf crop=iw-10:ih-50"
+#crop="-vf crop=352:572:0:4"
+#aspect="-aspect 4:3"
+#aspect="-aspect 16:9"
+#crop="$aspect"
+
+#aac_br1=96k	# < 160
+#aac_br2=128k	# >= 160
+#aac_br3=192k	# > 224
+
+aac_br1=72k	# < 160
+aac_br2=96k	# >= 160
+aac_br3=128k	# > 224
+
+mp2=aac
+ac3_stereo=224
+#ac3_stereo=448
+
+gop="-g 50"
+crf=21
+brmax=2000
+#brmax=3000
+
+mpeg2=h264
+#mpeg2=copy
+#mpeg2=hevc
+#h264enc=libx264
+h264enc=h264_nvenc
+
+probesize="-analyzeduration 50M -probesize 100M"
+
+mp2=aac
+#mp2=copy
+
+dts=eac3
+#dts=no
+
+#hwaccel="-hwaccel cuvid -c:v mpeg2_cuvid"
+gopt="$gopt -hwaccel cuvid"
+gopt="$gopt $hwaccel"
+#gopt="-fflags +genpts"
+gopt="$gopt -fix_sub_duration"
+gopt="$gopt -hide_banner"
+#gopt="$gopt $probesize"
+
+#deinterlace="-deinterlace"
+if [ "$hwaccel" == "" ]
+then
+    deinterlace="-filter:v yadif"
+else
+    deinterlace="-vf yadif_cuda"
+fi
+#deinterlace="-flags +ilme+ildct"
+
+#subtitle=yes
+
+#test="-t 60" # Sekunden
+#test="-t 300" # Sekunden
+#test="-t 1"
+
+#extr=mplayer
+#extr=vobcopy
+#extr=tccat
+extr=concat
+parallel=yes
+
+#aaclib="libfaac"
+aaclib="libfdk_aac" # Fraunhofer Library
+
+videodir=/video
+
+if [ "$mkv" == "yes" ]
+then
+    outf=mkv
+fi
+
+track=1
+if [ "$1" != "" ]
+then
+    track=$1
+fi
+track2=$track
+if [ ${#track2} -eq 1 ]
+then
+    track2=0$track
+fi
+
+infile="VTS_"$track2"_0.IFO"
+#infile="*.iso"
+#infile=/mnt/dvd
+
+chkfile="VTS_"$track2"_1.VOB"
+
+    file="/home/stream.vob"
+    if [ $(hostname) == "gentoo" ]
+    then
+	file="../stream.vob"
+    fi
+
+file1="VTS_"$track2"_0.IFO"
+#file1=VTS_02_0.IFO
+ifofile=$file1
+
+if [ -e $file1 ]
+then
+    infile=$file1
+fi
+w="*.iso"
+f=$(ls $w)
+nf=$(echo $f | wc -w)
+if [ $nf -eq 1 ]
+then
+    infile=$f
+fi
+
+which ffmpeg 2> /dev/null
+if [ $? -eq 0 ]
+then
+    ffmpeg=ffmpeg
+    ffprobe=ffprobe
+fi
+which avconv 2> /dev/null
+if [ $? -eq 0 ]
+then
+    ffmpeg=avconv
+    ffprobe=avprobe
+fi
+
+#exit
+
+echo "extr="$extr
+while (true) do
+    echo "mkv=$mkv"
+    echo "outf=$outf"
+    echo "mpeg2=$mpeg2"
+    echo "mp2=$mp2"
+    echo "infile=$infile"
+    echo "subtitle=$subtitle"
+    if [ "$crop" != "" ]
+    then
+	echo "crop=$crop"
+    fi
+    echo "l lokales Directory"
+    echo "i iso-File"
+    echo "d /dev/dvd"
+    echo "m mkv"
+    echo "s subtitle"
+    read answer
+    case $answer in
+	"l")
+	    w="VTS*.IFO"
+	    f=$(ls $w)
+	    nf=$(echo $f | wc -w)
+	    if [ $nf -eq 1 ]
+	    then
+		infile=$f
+	    else
+		is=1
+		for i in $f
+		do
+		    echo $is $i
+		    name[$is]=$i
+		    is=$(($is+1))
+		done
+		read filenr
+		infile=${name[$filenr]}
+	    fi
+	    file1=$infile
+	    ;;
+	"i")
+	    #set -x
+	    w="*.iso"
+	    f=$(ls $w)
+	    nf=$(echo $f | wc -w)
+	    if [ $nf -eq 1 ]
+	    then
+		infile=$f
+	    else
+		is=1
+		for i in $f
+		do
+		    echo $is $i
+		    name[$is]=$i
+		done
+		read filenr
+		infile=${name[$filenr]}
+	    fi
+	    #set +x
+	    ;;
+	"m")
+	    if [ "$mkv" == "" ]
+	    then
+		mkv="yes"
+		outf=mkv
+	    else
+		mkv=""
+		outf=
+	    fi
+	    ;;
+	"s")
+	    if [ "$subtitle" == "" ]
+	    then
+		subtitle="yes"
+	    else
+		subtitle=""
+	    fi
+	    ;;
+	"mc")
+	    mp2="copy"
+	    ;;
+	"ma")
+	    mp2="aac"
+	    ;;
+	"")
+	    break
+    esac
+done
+
+#join=yes	# concat ffmpeg >= 1.1
+
+#probesize="-probesize 10000000"	# default 5000000
+#probesize="-analyzeduration 500000000 -probesize 500000000"
+
+#preset="-preset fast -tune film -profile:v main -crf 21 -maxrate 2000k -bufsize 1835k"
+#preset="-preset medium -tune film -profile:v main -crf 21"
+#preset="-preset medium -tune grain -profile:v main -crf 21"
+#preset="-preset veryslow -qp 0"
+
+#if [ "$mkv" == "yes" ]
+if [ "$outf" != "" ]
+then
+    dts=copy
+fi
+
+#
+# Video wird nach h264 konvertiert
+# Audio mp2 wird nach aac konvertiert
+#	bis 192 kb/s --> 128 kb/s
+#	über 224 kb/s --> 192 kb/s
+# AC3 wird kopiert
+#
+# Alle Tonspuren bleiben erhalten
+#
+# Untertitel werden kopert
+#
+# info.vdr wird ergänzt mit "L 99"
+#
+# Softhddevice spielt das Ergebnis klaglos ab
+
+#set -x
+
+
+start=$(date +"%s")
+
+#d=$(basename $PWD)
+#dest=$d1.$d2.$d3
+d=$(ls -l --time-style="+%F.%H.%M" "VTS_"$track2"_1.VOB" | cut -d ' ' -f6)
+dest=$d."$track-0.rec"
+i=0
+while [ -e ../$dest ]
+do
+    i=$(($i+1))
+    #dd2=$(date -u "+%F.%H.%M" -d @$s)
+    dest=$d.$track-$i.rec
+done
+t=/tmp/info
+t2=/tmp/info2
+t3=/tmp/info3
+au=/tmp/audio
+rm -f $au
+
+#if [ "$mplayer" == "yes" -o "$vobcopy" == "yes" ]
+if [ "$extr" != "" ]
+then
+    #file1=/mnt/dvd/VIDEO_TS/VTS_01_0.IFO
+    #file2=VTS_02_0.IFO
+    #if [ ! -e $file1 ]
+    if [ "${infile##*.}" == "iso" ]
+    then
+	#set -x
+	#f=$(ls *.ISO)
+	f=$(ls *.iso)
+	mnt=/mnt/dvd
+	mount $f $mnt
+	file1=$mnt/VIDEO_TS/$file1
+	#file2=$mnt/VIDEO_TS/$file2
+	d=$(ls -l --time-style="+%F.%H.%M" $file1 | cut -d ' ' -f6)
+	dest=$d.$track"-0.rec"
+	mkdir temp
+	cd temp
+	#set +x
+    fi
+    if [ "$infile" == "/mnt/dvd" ]
+    then
+	mnt=/mnt/dvd
+	mount $mnt
+	file1=$mnt/VIDEO_TS/$file1
+	#file2=$mnt/VIDEO_TS/$file2
+	d=$(ls -l --time-style="+%F.%H.%M" $file1 | cut -d ' ' -f6)
+	dest=$d."$track-0.rec"
+	mkdir temp
+	cd temp
+    fi
+    #exit
+    #set -x
+    if [ ! -e $file ]
+    then
+	#if [ "$mplayer" == "yes" ]
+	if [ "$extr" == "concat" ]
+	then
+	    #set -x
+	    parallel=
+	    #  VTS_07_1.VOB
+	    i=1
+	    file="concat:"
+	    del=
+	    while [ -e "VTS_"$track2"_$i.VOB" ]
+	    do
+		r="VTS_"$track2"_$i.VOB"
+		#echo $r
+		file=$file$del$r
+		del="|"
+		i=$(($i+1))
+	    done
+	    chkfile=$file
+	    #exit
+	fi
+	if [ "$extr" == "mplayer" ]
+	then
+	    if [ "$parallel" == "yes" ]
+	    then
+		mkfifo $file
+		mplayer -dumpstream $file1 -dumpfile $file &
+	    else
+		mplayer -dumpstream $file1 -dumpfile $file
+		chkfile=$file
+	    fi
+	fi
+	if [ "$extr" == "vobcopy" ]
+	then
+	    f1=${file%.*}
+	    dir1=$(dirname $f1)
+	    f2=$(basename $f1)
+	    file=$f1$track.vob
+	    wd=$PWD
+	    cd $dir1
+	    if [ "$parallel" == "yes" ]
+	    then
+		#mkfifo $file
+		#vobcopy -i $wd -n $track -l -t $f2 &
+		extract="vobcopy -i $wd -n $track -l -q -o -"
+		file="-"
+	    else
+		vobcopy -i $wd -n $track -l -t $f2
+		chkfile=$file
+	    fi
+	    cd $wd
+	fi
+	if [ "$extr" == "tccat" ]
+	then
+	    wd=$PWD
+	    tcopt="-i $wd -t dvd -T $track,-1"
+	    extract="tccat $tcopt"
+	    #extract="tccat -i . -t dvd -T $track"
+	    file="-"
+	fi
+    fi
+    #if [ -e $file2 ]
+    #then
+	#mplayer -dumpstream $file2 -dumpfile stream2.dump
+    #fi
+else
+    file=VTS_01_0.VOB
+fi
+#exit
+
+#$ffmpeg -i $file 2> $t
+if [ "$extr" == "tccat" ]
+then
+    #tccat $tcopt | $ffprobe -i - 2> $t
+    tccat $tcopt | $ffprobe - 2> $t
+    killall tccat
+else
+    $ffmpeg -hide_banner -i $chkfile 2> $t
+fi
+#w="*.VOB"
+if [ -e ../info$track.vdr ]
+then
+    if [ -h ../info.vdr ]
+    then
+	rm ../info.vdr
+	#echo "schon vorhanden"
+	#exit 8
+    fi
+    #set -x
+    dir=$PWD
+    cd ..
+    ln -s info$track.vdr info.vdr
+    cd $dir
+    #exit
+fi
+if [ -e ../info.vdr ]
+then
+    info="../info.vdr"
+    while read line
+    do
+	if [ "${line:0:1}" == "E" ]
+	    then
+		rec_start_s=$(echo $line | cut -d \  -f 3)
+            fi
+    done < $info
+    d=$(date +%F.%H.%M -d @$rec_start_s)
+    dest=$d."$track-0.rec"
+    i=0
+    while [ -e ../$dest ]
+    do
+	i=$(($i+1))
+	dest=$d.$track-$i.rec
+    done
+fi
+
+#cat $t
+#exit
+
+ofile="../$dest/00001.ts"
+#if [ "$mkv" == "yes" ]
+if [ "$outf" != "" ]
+then
+    d1=$(dirname $PWD)
+    title=$(basename $d1)
+    if [ $track -gt 1 ]
+    then
+	title=$title"-"$track
+    fi
+    ofile="../$title-$mpeg2.$outf"
+    dest=""
+fi
+script=$(basename $0)
+#log="../$dest/$script-$track-$mpeg2.log"
+log=$ofile.log
+loge="../$dest/$script-$track.err"
+#exit
+mkdir ../$dest
+d=`date +"%F %T"`
+echo "Start $d" > $log
+echo $(hostname) >> $log
+#cat /proc/cpuinfo | grep "model name" | tail -n 1 >> $log
+uname -p >> $log
+echo $PWD >> $log
+echo "file1=$file1" >> $log
+echo "infile=$infile" >> $log
+echo "extr=$extr" >> $log
+echo "mpeg2=$mpeg2" >> $log
+if [ "$crop" != "" ]
+then
+    echo "crop=$crop" >> $log
+fi
+echo "subtitle=$subtitle" >> $log
+echo $PWD >> /tmp/h264_current
+echo $d $PWD $infile >> /var/log/h264
+ls -lLk >> $log
+m=${file1:0:6}"*"
+#ls -l ${file1:0:6}"*" >> $log
+#echo $m >> $log
+echo "Selected:" >> $log
+#ls -l $m >> $log
+ls -l $m > $t2
+cat $t2 >> $log
+#set -x
+size1=0
+while read line
+do
+    s=$(echo $line|cut -d \  -f 5)
+    size1=$(($size1+$s))
+done < $t2
+size1=$(($size1/1024))
+#exit
+#size1=$(du -L)
+#size1=$(echo $size1 | cut -d ' ' -f 1)
+if [ "$mnt" != "" ]
+then
+    ls -lLk $mnt/VIDEO_TS >> $log
+    umount $mnt
+fi
+
+d2=$(dirname "$PWD")
+title=$(basename "$d2")
+#exit
+
+#info=$($ffmpeg -i 00001.ts | grep "Stream" | grep "Audio")
+#cp $t $log
+echo file=$file >> $log
+#dur1=$(mediainfo $ifofile | grep Duration | head -n 1)
+#echo $dur1 >> $log
+#set -x
+echo -n "Duration : " >> $log
+mediainfo --Inform="General;%Duration/String3%" $ifofile >> $log
+mediainfo --Inform="General;%Audio_Language_List%" $ifofile >> $log
+dar1=$(mediainfo --Inform="Video;%DisplayAspectRatio/String%" $ifofile)
+echo $dar1 >> $log
+#if [ "$crop" == "" ]
+#then
+#    crop="-aspect $dar1"
+#fi
+# mediainfo --Inform="Audio;%Language/String%"
+# mediainfo --Inform="Audio;%ID%"
+m=/tmp/mplayer
+mplayer -identify -frames 0 $ifofile > $m 2> /dev/null
+#set -x
+l=$(cat $m|grep ^ID_AID)
+# ID_AID_128_LANG=de
+#l=$(echo $l|tr "\r" " ")
+l=$(echo $l)
+declare -a langa
+for i in $l
+do
+    #echo $i
+    export $i
+    k=$(echo $i|cut -d '_' -f 3)
+    la=$(echo $i|cut -d '=' -f 2)
+    langa[$k]=$la
+    echo $i >> $log
+done
+#exit
+cat $t >> $log
+
+dura=$(grep "Duration:" $t)
+
+# Stream #0:0[0xad]: Video: mpeg2video (Main) ([2][0][0][0] / 0x0002), yuv420p, 720x576 [SAR 16:15 DAR 4:3], 15000 kb/s, 25 fps, 25 tbr, 90k tbn, 50 tbc
+# Stream #0:0[0x100]: Video: h264 (Main) ([27][0][0][0] / 0x001B), yuv420p, 720x576 [SAR 64:45 DAR 16:9], 25 fps, 25 tbr, 90k tbn, 50 tbc
+
+videof=$(cat $t | grep "Video:")
+videof=$(echo $videof | cut -d ' ' -f 4)
+videof=${videof//,/}
+#if [ "$videof" != "mpeg1video" ]
+if [ "$videof" != "mpeg2video" -a "$videof" != "mpeg1video" ]
+then
+    echo "Video im falschen Format?"
+    exit
+    video="-c:v copy"
+fi
+
+#info=$(cat $t | grep "Stream" | grep "Audio")
+grep "Stream" $t | grep "Audio" > $t2
+#cat $t2
+sleep 1
+cp $t $t3
+rm $t
+while read line
+do
+    kenn=$(echo $line | cut -d ' ' -f 2 | cut -d '[' -f 2 | cut -d ']' -f 1)
+    stream=$(echo $line | cut -d ' ' -f 2-)
+    echo "$kenn $stream" >> $t
+done < $t2
+sort < $t > $t2
+
+# Stream #0:1[0x25a](deu): Audio: mp2 ([3][0][0][0] / 0x0003), 48000 Hz, stereo, s16, 192 kb/s (clean effects)
+# Stream #0:2[0x25b](2ch): Audio: mp2 ([3][0][0][0] / 0x0003), 48000 Hz, stereo, s16, 192 kb/s (clean effects)
+# Stream #0:1[0x1c0]: Audio: mp2, 48000 Hz, stereo, s16, 192 kb/s
+
+map="-map 0:v:0"
+#map="-map 0:v"
+streamo=0
+bras=0
+audiostr=0
+while read line
+do
+    #set -x
+    echo $line
+    line2=${line/./:}
+    echo $line2    
+    stream1=$(echo $line2 | cut -d ' ' -f 2 | cut -d ':' -f 2 | cut -d '[' -f 1)
+    stream=$(($stream1-1))
+    codec=$(echo $line | cut -d ' ' -f 4)
+    codec=${codec//,/}
+    kenn=$(echo $line | cut -d "["  -f 2 | cut -d "]"  -f 1)
+    kenn=$(($kenn))
+    #ID=$"ID_AID_"$kenn"_LANG"
+    #lang=(eval echo $ID)
+    lang=${langa[$kenn]}
+    #echo $lang
+    if [ "$lang" == "" ]
+    then
+	lang=${langa[$audiostr]}
+    fi
+    if [ "$lang" != "" ]
+    then
+	metal="$metal -metadata:s:a:$streamo language=$lang"
+    fi
+    #exit
+    case "$codec" in
+	"mp2")
+	    if [ "$mp2" == "aac" ]
+	    then
+		br=$aac_br2
+		for i in $line
+		do
+		    #echo $i
+		    if [ "$i" == "kb/s" ]
+		    then
+			break
+		    fi
+		    bra=$i
+		done
+		if [ $bra -gt 224 ]
+		then
+		    br=$aac_br3
+		fi
+		if [ $bra -lt 160 ]
+		then
+		    br=$aac_br1
+		fi
+		audio="$audio -c:a:$streamo $aaclib -b:a:$streamo $br"
+		echo "X 6 03 lang aac" >> $au
+	    else
+		audio="$audio -c:a:$streamo copy"
+		echo "X 2 03 lang mp2" >> $au
+	    fi
+	    #map="$map -map 0:a:$stream"
+	    map="$map -map 0:$stream1"
+	    streamo=$(($streamo+1))
+	    bras=$(($bras+$bra))
+	    audiostr=$(($audiostr+1))
+	    ;;
+	"ac3" | "aac")
+	    for i in $line
+	    do
+		#echo $i
+		if [ "$i" == "kb/s" ]
+		then
+		    break
+		fi
+		bra=$i
+	    done
+	    line2=${line//,/}
+	    atyp1=${line2#*Hz*}
+	    atyp=$(echo $atyp1 | cut -d ' ' -f 1)
+	    atyp=${atyp//,/}
+	    if [ "$atyp" == "stereo" -a $bra -ge $ac3_stereo ]
+	    then
+		#audio="$audio -c:a:$streamo ac3 -ac:a:$streamo 2 -b:a:$streamo 192k"
+		audio="$audio -c:a:$streamo $aaclib -ac:a:$streamo 2 -b:a:$streamo 128k"
+	    else
+		if [ "$mpeg2" == "hevc" ]
+		then
+		    if [ "$atyp" == "stereo" ]
+		    then
+			#audio="$audio -c:a:$streamo $aaclib -ac:a:$streamo 2 -b:a:$streamo 96k"
+			audio="$audio -c:a:$streamo eac3 -ac:a:$streamo 2 -b:a:$streamo 128k"
+		    else
+			audio="$audio -c:a:$streamo eac3 -b:a:$streamo 256k"
+		    fi
+		else
+		    audio="$audio -c:a:$streamo copy"
+		fi
+	    fi
+	    #map="$map -map 0:a:$stream"
+	    map="$map -map 0:$stream1"
+	    streamo=$(($streamo+1))
+	    echo "X 4 05 lang ac3" >> $au
+	    bras=$(($bras+$bra))
+	    audiostr=$(($audiostr+1))
+	    ;;
+	"dts")
+	    #echo "no DTS" >> $log
+	    if [ "$dts" == "eac3" ]
+	    then
+		audio="$audio -c:a:$streamo eac3 -b:a:$streamo 448k"
+		echo "X 2 03 lang eac3" >> $au
+		#map="$map -map 0:a:$stream"
+		map="$map -map 0:$stream1"
+		streamo=$(($streamo+1))
+	    fi
+	    #audio="$audio -c:a:$stream $aaclib -b:a:$stream 448k"
+	    #echo "X 2 03 lang aac" >> $au
+	    if [ "$dts" == "copy" ]
+	    then
+		audio="$audio -c:a:$streamo copy"
+		#map="$map -map 0:a:$stream"
+		map="$map -map 0:$stream1"
+		streamo=$(($streamo+1))
+	    fi
+	    bras=$(($bras+$bra))
+	    audiostr=$(($audiostr+1))
+	    ;;
+	"pcm_dvd")
+	    br=192k
+	    audio="$audio -c:a:$streamo $aaclib -b:a:$streamo $br"
+	    echo "X 6 03 lang aac" >> $au
+	    map="$map -map 0:$stream1"
+	    streamo=$(($streamo+1))
+	    ;;
+	*)
+	    echo "Codec $codec unkown"
+	    exit 8
+	    ;;
+	
+    esac
+    #map="$map -map 0:$stream1"
+    #map="$map -map 0:a:$stream"
+done < $t2
+#exit
+#audio="$audio -async 1"
+#audio="$audio -copyts"
+
+#set -x
+#brva1=${dura%% kb/s*}
+#nw=$(echo $brva1|wc -w)
+#brva=$(echo $brva1|cut -d \  -f $nw)
+brv=$brmax
+brva1=${dura##*bitrate:}
+brva=$(echo $brva1|cut -d \  -f 1)
+if [ "$brva" != "N/A" ]
+then
+    brv=$((($brva-$bras)/2))
+fi
+if [ $brv -gt $brmax ]
+then
+    brv=$brmax
+fi
+if [ $extr == "tccat" ]
+then
+    brv=$brmax
+fi
+#exit
+preset="-preset fast -tune film $profile -crf $crf -maxrate "$brv"k -bufsize 1835k $gop"
+if [ "$h264enc" == "h264_nvenc" ]
+then
+    preset="-preset hq $profile -cq $crf -maxrate "$brv"k -bufsize 1835k $gop"
+    #preset="-preset hq $profile -cq $crf $gop"
+fi
+video="-c:v copy"
+if [ "$mpeg2" == "h264" ]
+then
+    video="-c:v $h264enc $preset $deinterlace"
+fi
+if [ "$mpeg2" == "hevc" ]
+then
+    #profile="-profile:v main -level 3.0"
+    profile="-profile main -level 4.0"
+    #preset="-preset hq $profile -cq $crf -maxrate "$brv"k -bufsize 1835k $gop"
+    #preset="-preset hq $profile -cq $crf -maxrate 1000k -bufsize 1835k $gop"
+    preset="-preset hq $profile -rc vbr -cq $crf -r 50 $gop"
+    video="-c:v hevc_nvenc $preset $deinterlace"
+fi
+#exit
+#set -x
+grep "Stream" $t3 | grep "Subtitle" > $t2
+
+# Stream #0:5[0xe7](deu): Subtitle: dvb_subtitle ([6][0][0][0] / 0x0006) (hearing impaired)
+# Stream #0:3[0x34]: Subtitle: dvd_subtitle
+
+if [ "$subtitle" == "yes" ]
+then
+
+#cat $t3
+#cat $t2
+#while read line
+#do
+    #echo $line
+#    stream1=$(echo $line | cut -d ' ' -f 2 | cut -d ':' -f 2 | cut -d '[' -f 1)
+#    map="$map -map 0:$stream1"
+    #map="$map -map 0:s:0"
+    #sub="-c:s copy"
+#    sub="$sub -c:0:$stream1 copy"
+#done < $t2
+
+map="$map -map 0:s?"
+sub="-c:s copy"
+
+#if [ "$extr" != "vobcopy" ]
+#then
+#    map="-map 0:v:0"
+#    audio=""
+#    sub="-scodec copy"
+#    video="-c copy $video"
+#fi
+#video="-c:a copy -c:s copy $video"
+
+#gopt="$gopt -fix_sub_duration"
+
+fi
+
+if [ "$sub" == "" ]
+then
+    sub="-scodec copy"
+fi
+
+echo $map
+echo $video
+echo $audio
+echo $sub
+echo "map:" $map >> $log
+echo "audio:" $audio >> $log
+echo "video:" $video >> $log
+#exit
+
+#gopt="-n"
+#preset="-preset fast"
+#audio="-c:a copy"
+#audio="-c:a:0 libfaac -c:a:1 libfaac -b:a 128k -async 1"
+#map="-map 0:0 -map 0:1 -map 0:2"
+
+if [ "$join" == "yes" ]
+then
+    #flist=/tmp/flist
+    flist=flist
+    rm -f $flist
+    #filesj="-i concat:\""
+fi
+
+#service="-metadata service_name=\"$title\""
+
+chapt_mediainfo() {
+#set -x
+meta=ffmetadata
+rm $meta
+echo ";FFMETADATA1" > $meta
+mi=mediainfo.txt
+mediainfo $ifofile > $mi
+found=0
+while read line
+do
+    if  [ "$line" == "" ]
+    then
+        found=0
+    fi
+    if [ $found == 1 ]
+    then
+        # 00:08:28.333 : Chapter 2
+        echo $line
+        if [ "${line:0:8}" == "Duration" ]
+        then
+	    continue
+	fi
+        if [ "${line:0:4}" == "List" ]
+        then
+	    break
+	fi
+	#set -x
+        ch=$line
+        cht=$(echo $line|cut -d ' ' -f 1)
+        chn=$(echo $line|cut -d ' ' -f 3-)
+        hh=${cht:0:2}
+        mm=${cht:3:2}
+        ss=${cht:6:2}
+        ms=${cht:9:3}
+        s=$(date -u "+%s" -d "1970-01-01 $hh:$mm:$ss")
+        #s=$(($s*1000+$ms))
+        s="$s$ms"
+        if [ "$cha" != "" ]
+        then
+            echo "[CHAPTER]" >> $meta
+            echo "TIMEBASE=1/1000" >> $meta
+            echo "START="$sa >> $meta
+            echo "#chapter ends at" $cht >> $meta
+            #se=$(($s-1))
+            echo "END="$s >> $meta
+            echo "title="$chna >> $meta
+            #exit
+        fi
+        cha=$ch
+        chta=$cht
+        chna=$chn
+        sa=$s
+        #exit
+    fi
+    if  [ "$line" == "Menu" ]
+    then
+        found=1
+    fi
+done < $mi
+#set -x
+dur=$(grep ^Duration $mi|head -n 1)
+# Duration                                 : 1 h 27 min
+dur2=$(echo $dur|cut -d ':' -f 2)
+h=$(echo $dur2|cut -d \  -f 1)
+m=$(echo $dur2|cut -d \  -f 3)
+s=$(($h*3600+$m*60))
+s=$(($s*1000))
+echo "[CHAPTER]" >> $meta
+echo "TIMEBASE=1/1000" >> $meta
+echo "START="$sa >> $meta
+echo "#chapter ends at" $dur2 >> $meta
+echo "END="$s >> $meta
+echo "title="$chna >> $meta
+#exit
+}
+
+#if [ "$mplayer" == "yes" -o "$vobcopy" = "yes" ]
+if [ "$extr" != "" ]
+then
+    #if [ "$mkv" == "yes" ]
+    if [ "$outf" != "" -a "$extr" == "concat" ]
+    then
+	chapt_mediainfo
+	metaf="-i ffmetadata"
+	#sub=
+    fi
+    if [ "$outf" != "" -a "$extr" != "concat" ]
+    then
+	dvdxchap -t $track . > chapter.txt
+	#set -x
+	meta=ffmetadata
+	echo ";FFMETADATA1" > $meta
+	tag=$(date -u +"%s" -d 0:00:00)
+	ca=0
+	while read line
+	do
+	    # CHAPTER01=00:00:00.000
+	    # CHAPTER01NAME=Chapter 01
+	    # CHAPTER02=00:10:37.800
+	    # CHAPTER02NAME=Chapter 02
+	    #echo $line
+	    if [ ${line:9:1} == "=" ]
+	    then
+		ct=${line:10}
+		c=$(date -u +"%s" -d $ct)
+		ms=$(echo $ct|cut -d '.' -f 2)
+		c=$(($c-$tag))
+		#c=$(($c*1000))
+		#c=$(($c+$ms))
+		if [ "$c" == "0" ]
+		then
+		    c=$ms
+		else
+		    c=$c$ms
+		fi
+	    fi
+	    if [ ${line:9:4} == "NAME" ]
+	    then
+		n=${line:14}
+		if [ $c -eq 0 ]
+		then
+		    na=$n
+		    ta=$ct
+		    continue
+		fi
+		echo "[CHAPTER]" >> $meta
+		echo "TIMEBASE=1/1000" >> $meta
+		echo "START=$ca" >> $meta
+		echo "#chapter ends at $ct" >> $meta
+		echo "END=$(($c-1))" >> $meta
+		echo "title=$na $ta - $ct" >> $meta
+		ca=$c
+		ta=$ct
+		#exit
+	    fi
+	    na=$n
+	    #exit
+	done < chapter.txt
+	#echo "[CHAPTER]" >> $meta
+	#echo "TIMEBASE=1/1000" >> $meta
+	#echo "START=$ca" >> $meta
+	#echo "#chapter ends at $ct" >> $meta
+	#echo "END=$c" >> $meta
+	#echo "title=$na $ta - $ct" >> $meta
+	metaf="-i ffmetadata"
+	#exit
+    fi
+    #opt="$gopt -i $file $crop $map $video $audio $sub $test $service $ofile"
+    opt="$gopt -i $file $metaf $map $video $crop $audio $metal $sub $test $service $ofile"
+    #opt="$gopt -i $file $metaf $map $video $crop $audio $metal $sub $test $service $ofile 2>&1 tee > $log2"
+    echo $ffmpeg $opt >> $log
+    err=${ofile%.*}".err"
+    if [ "$parallel" == "yes" ]
+    then
+	echo "$extract" >> $log
+	$extract | nice $ffmpeg $opt 2>&1 | tee $err
+	#$extract | nice $ffmpeg $opt 2>&1 tee > $log2
+    else
+	nice $ffmpeg $opt 2>&1 | tee $err
+	#nice $ffmpeg $opt 2>&1 tee > $log2
+    fi
+    $ffmpeg -i $ofile 2> $t
+    grep "Duration:" $t >> $log
+    rm -f "/home/stream.vob"
+    rm -f "/home/stream$track.vob"
+    rm -f "../stream.vob"
+    rm -f "../stream$track.vob"
+else
+
+for r in $w
+do
+    #files="$files -i $r"
+    files="-i $r"
+    $ffmpeg $files 2> $t
+    grep "Duration:" $t >> $log
+    if [ "$join" == "yes" ]
+    then
+	if [ -h $r ]
+	then
+	    rr=$(realpath $r)
+	    echo "file '$rr'" >> $flist
+	else
+	    echo "file '$r'" >> $flist
+	fi
+	#filesj="$filesj$r|"
+    else
+	# VTS_01_1.VOB
+	o="0000"${r:7:1}.ts
+	opt="$gopt $files $map $video $audio $sub $test $service ../$dest/$o"
+	echo $ffmpeg $opt >> $log
+	nice $ffmpeg $opt
+	$ffmpeg -i ../$dest/$o 2> $t
+	grep "Duration:" $t >> $log
+    fi
+    done
+
+if [ "$join" == "yes" ]
+then
+    cat $flist >> $log
+    filesj=" -f concat -i $flist"
+    #filesj=${filesj:0:$((${#filesj}-1))}"\""
+    opt="$gopt $filesj $map $video $audio $sub $test $service ../$dest/00001.ts"
+    echo $ffmpeg $opt >> $log
+    nice $ffmpeg $opt
+    $ffmpeg -i ../$dest/00001.ts 2> $t
+    grep "Duration:" $t >> $log
+fi
+
+fi
+
+#ffmpeg -i 0000%d.ts
+#ffmpeg -n -i 00001.ts -c:v libx264 -c:a copy $test ../$dest/00001.ts
+
+#if [ "$mkv" == "yes" ]
+if [ "$outf" != "" ]
+then
+    cat $t >> $log
+    size2=$(ls -l $ofile|cut -d \  -f 5)
+    size2=$(($size2/1024))
+else
+
+if [ "$info" != "" ]
+then
+    cp -p $info ../$dest/info
+    echo "L 99" >> ../$dest/info
+else
+    t=$(echo $title|tr -s '_' ' ')
+    echo "C D dvd" >> ../$dest/info
+    echo "T $t" >> ../$dest/info
+    echo "X 5 03 deu Video" >> ../$dest/info
+    cat $au >> ../$dest/info
+    echo "L 99" >> ../$dest/info
+fi
+
+if [ -e info.txt ]
+then
+    i=$(cat info.txt)
+    echo "$i H264" > ../$dest/info.txt
+else
+    echo H264 > ../$dest/info.txt
+fi
+
+#cd ../$dest
+
+vdr=$VDRDIR/vdr
+
+if [ -e $vdr ]
+then
+    #wd=$(pwd)
+    #$vdr --genindex="$wd"
+    $vdr --genindex="../$dest"
+fi
+
+$ffmpeg -hide_banner -i ../$dest/00001.ts 2>> $log
+
+#/usr/bin/touch $videodir/.update
+
+#size2=$(du)
+size2=$(du ../$dest)
+size2=$(echo $size2 | cut -d ' ' -f 1)
+
+fi
+
+d=`date +"%F %T"`
+echo "Ende $d" >> $log
+ende=$(date +"%s")
+sek=$(($ende-$start))
+min=$(($sek/60))
+echo "$min Minuten" >> $log
+date -u -d @$sek "+%T" >> $log
+comp=$(($size1*100/$size2))
+echo "vorher " $size1  >> $log
+echo "nachher" $size2  >> $log
+echo "Kompression: $comp %" >> $log

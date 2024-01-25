@@ -1,0 +1,232 @@
+#!/bin/bash
+
+# Elementary Streams --> vdr
+
+#set -x
+
+#mkv=yes
+#outf=mkv
+#outf=mp4
+
+crf=21
+gop="-g 50"
+#profile="-profile:v main"
+#level="-level 4.0"
+profile="-profile:v high"
+level="-level 3.0"
+#level="-level 4.0"
+#deinterlace="-filter:v yadif"
+#deinterlace="-flags +ilme+ildct"
+#scale="-vf scale=960:540"
+aaclib="libfdk_aac"
+aac_br=128k
+#aac_br=192k
+#aspect="-aspect 4:3"
+#aspect="-aspect 16:9"
+gopt="-fflags +genpts"
+#filter="-vf setpts=N"
+
+
+#test="-t 60" # Sekunden
+#test="-t 300" # Sekunden
+#test="-t 1"
+
+start=$(date +"%s")
+
+dir="."
+if [ "$1" != "" ]
+then
+    dir=$1
+fi
+
+if [ "$mkv" == "yes" ]
+then
+    outf=mkv
+fi
+
+if [ -e info ]
+then
+    info=info
+fi
+if [ -e info.vdr ]
+then
+    info=info.vdr
+fi
+
+if [ -e $dir/Celltimes.txt ]
+then
+    meta=ffmetadata
+    echo ";FFMETADATA1" > $meta
+    msa=0
+    ch=1
+    while read line
+    do
+	echo $line
+	#frames=${line//\r/}
+	frames=${line:0:$((${#line}-1))}
+	ms=$(($frames*1000/25))
+	echo "[CHAPTER]" >> $meta
+	echo "TIMEBASE=1/1000" >> $meta
+	echo "START=$msa" >> $meta
+	echo "END=$ms" >> $meta
+	echo "title=chapter$ch" >> $meta
+	ch=$(($ch+1))
+	msa=$ms
+	#exit
+    done < $dir/Celltimes.txt
+fi
+#exit
+v=$(ls $dir/*.m2v $dir/*.mpv)
+br=2000
+#opt="--preset fast --tune film --profile main $level --crf $crf --vbv-bufsize 1835 --vbv-maxrate $br $deinterlace -I 50"
+preset="-preset fast -tune film $profile $level -crf $crf -maxrate "$br"k -bufsize 1835k"
+preset="$preset $gop"
+video="-c:v libx264 $preset $deinterlace $scale $aspect $filter"
+if [ "$v" == "" ]
+then
+    v=$(ls $dir/*.264 $dir/*.h264)
+    video="-c:v copy"
+    preset=""
+    probesize="-probesize 100M -analyzeduration 300M"
+    gopt="$probesize $gopt"
+    if [ "$h264" == "h264" -o "$scale" != "" ]
+    then
+	preset="-preset fast -tune film $profile $level -crf $crf"
+	preset="$preset $gop"
+	video="-c:v libx264 $preset $deinterlace $scale $aspect $filter"
+    fi
+fi
+if [ "$v" == "" ]
+then
+    v=$(ls $dir/*.vc1)
+    video="-c:v copy"
+    preset=""
+    probesize="-probesize 100M -analyzeduration 300M"
+    gopt="$probesize -fflags +genpts"
+fi
+# 00001.m2v: MPEG sequence, v2, MP@ML interlaced Y'CbCr 4:2:0 video, CCIR/ITU PAL 625, 16:9, 25 fps
+# video.264: JVT NAL sequence, H.264 video @ L 31
+
+if [ "$info" != "" ]
+then
+    e=$(grep "^E" $info)
+    rec_start_s=$(echo $e | cut -d \  -f 3)
+    d=$(date +%F.%H.%M -d @$rec_start_s)
+    dest=$d."4-0.rec"
+else
+    d=$(ls -l --time-style="+%F.%H.%M" $v | cut -d ' ' -f6)
+    dest=$d."4-0.rec"
+fi
+
+#if [ "$mkv" == "yes" ]
+if [ "$outf" != "" ]
+then
+    dest=.
+else
+    mkdir -p $dest
+fi
+log=$dest/logfile
+d=`date +"%F %T"`
+echo "Start $d" > $log
+echo $(hostname) >> $log
+echo $PWD >> $log
+
+ls -l $dir >> $log
+
+file $v >> $log
+dur1=$(mediainfo $v | grep Duration | head -n 1)
+echo $dur1 >> $log
+echo "preset=$preset" >> $log
+map="-map 0:v:0"
+input="-i $v"
+is=1
+# 00001-02.mp2: MPEG ADTS, layer II, v1, 160 kbps, 48 kHz, JntStereo
+mp2=$(ls $dir/*.mp2 $dir/*.mpa $dir/*.wav)
+for i in $mp2
+do
+    file $i >> $log
+    map="$map -map $is:0"
+    input="$input -i $i"
+    audio="$audio -c:$is $aaclib -b:$is $aac_br"
+    is=$((is+1))
+done
+# 00001.deu.ac3: ATSC A/52 aka AC-3 aka Dolby Digital stream, 48 kHz,, complete main (CM) 2 front/0 rear, LFE on,, 448 kbit/s Dolby Surround encoded
+# 00001.deu.ac3: ATSC A/52 aka AC-3 aka Dolby Digital stream, 48 kHz,, complete main (CM) 3 front/2 rear, LFE on,, 384 kbit/s reserved Dolby Surround mode
+ac3=$(ls $dir/*.ac3)
+eac3=$(ls $dir/*.eac3)
+if [ "$eac3" != "" ]
+then
+    ac3="$ac3 $eac3"
+fi
+for i in $ac3
+do
+    file $i >> $log
+    map="$map -map $is:0"
+    input="$input -i $i"
+    audio="$audio -c:$is copy"
+    is=$((is+1))
+done
+dts=$(ls $dir/*.dts)
+for i in $dts
+do
+    file $i >> $log
+    map="$map -map $is:0"
+    input="$input -i $i"
+    audio="$audio -c:$is eac3 -b:$is 448k"
+    is=$((is+1))
+done
+sub=$(ls $dir/*.sup)
+#sub=$(ls $dir/*.mkv)
+for i in $sub
+do
+    echo $i >> $log
+    map="$map -map $is:0"
+    #input="$input -f sup -i $i"
+    #input="$input -f vobsub -i $i"
+    input="$input -i $i"
+    subt="$subt -c:$is copy"
+    is=$((is+1))
+done
+echo "map=$map" >> $log
+echo "video=$video" >> $log
+audio="$audio -copyts"
+echo "audio=$audio" >> $log
+#if [ "$mkv" == "yes" ]
+if [ "$outf" != "" ]
+then
+    out=$(basename $PWD)"."$outf
+    if [ -e ffmetadata ]
+    then
+	input="$input -i ffmetadata"
+    fi
+else
+    out=$dest/00001.ts
+fi
+#exit
+#ffmpeg $test $gopt $input $map $video $audio $out
+opt="$test $gopt $input $map $video $audio $subt $out"
+echo "ffmpeg $opt" >> $log
+nice ffmpeg $opt
+#ffmpeg -i $out 2>&1 >> $log
+ffmpeg -i $out 2>> $log
+
+#if [ "$mkv" == "" ]
+if [ "$outf" == "" ]
+then
+    cp -p $info $dest/info
+    cp -p *.txt $dest
+    echo "H264" > $dest/info.txt
+
+    vdr=$VDRDIR/vdr
+    if [ -e $vdr ]
+    then
+	$vdr --genindex="./$dest"
+    fi
+fi
+
+d=`date +"%F %T"`
+echo "Ende $d" >> $log
+ende=$(date +"%s")
+sek=$(($ende-$start))
+min=$(($sek/60))
+echo "$min Minuten" >> $log

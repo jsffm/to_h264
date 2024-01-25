@@ -1,0 +1,341 @@
+#!/bin/bash
+
+# mp42vdr						jsffm@web.de
+
+set -x
+
+#split="--split-size=4GB"
+split="--split-size=4096MB"	# tsmuxer
+#split="--split-size=4000M"
+#split="--split-size=4000000B" # don´t work
+
+remux=tsmuxer
+remux=ffmpeg
+
+f=$1
+
+vdr=$VDRDIR/vdr
+videodir=/video
+
+t=/tmp/info
+t2=/tmp/info2
+
+start=$(date +"%s")
+
+#set -x
+# 2011-12-19.20.16.3-0.rec
+
+df=$(date "+%F.%H.%M" -r $f)
+d32=0
+dest=$df.3-$d32.rec
+while [ -e $dest ]
+do
+    d32=$(($d32+1))
+    dest=$df.3-$d32.rec
+done
+
+#exit
+
+wlog () {
+
+    d=`date +"%F %T"`
+    echo $d $1 >> $log
+}
+
+mkdir $dest
+logt=$log
+log="$dest/logfile"
+d=`date +"%F %T"`
+echo "Start $d" ts_remux $(hostname) > $log
+#echo $(hostname) >> $log
+echo $PWD >> $log
+echo "remux=$remux" >> $log
+
+fr=$(realpath $f)
+ls=$(ls -l "$fr")
+echo $ls >> $log
+size1=$(echo $ls|cut -d \  -f 5)
+size1=$(($size1/1024))
+
+#exit
+
+title=$(basename $PWD)
+#exit
+
+ges=0
+
+ffprobe -i $f 2> $log
+
+if [ "$remux" == "ffmpeg" ]
+then
+    loge=$dest/log.err
+    ffmpeg -i $f -map 0 -c copy $dest/00001.ts 2>&1 | tee $loge
+    cat $loge >> $log
+    rm $loge
+fi
+
+if [ "$remux" == "tsmuxer" ]
+then
+    tsMuxeR $f >> $log
+    infile="-i $f"
+    h=$(($ges/3600))
+    m=$(($ges/60-$h*60))
+    s=$(($ges-$m*60-$h*3600))
+    #echo "Dauer $h:$m:$s" >> $log
+    #set -x
+    #mkdir -p $temp
+	#startv=$($ffprobe -i $infile -show_streams -select_streams v | grep "start_time=" | cut -d "=" -f 2)
+	startv=$(ffprobe $infile -show_streams -select_streams v | grep "start_time=" | cut -d "=" -f 2)
+    startv=${startv//./}
+    l=${#startv}
+    startv=${startv:0:$(($l-3))}
+    echo "startv=$startv" >> $log
+    #file="$temp/temp.ts"
+    meta=$dest/vdr.meta
+    #echo "MUXOPT --no-pcr-on-video-pid --new-audio-pes --vbr $split --vbv-len=500" > $meta
+    #echo "MUXOPT --pcr-on-video-pid --new-audio-pes --vbr $split" > $meta
+    echo "MUXOPT --vbr $split" > $meta
+
+meta_ffprobe () {
+    #$ffprobe -i $infile 2> $t
+    ffprobe $infile 2> $t
+    grep "Stream" $t > $t2
+    # Stream #0:0[0xa3]: Video: mpeg2video (Main) ([2][0][0][0] / 0x0002), yuv420p, 720x576 [SAR 64:45 DAR 16:9], 25 fps, 25 tbr, 90k tbn, 50 tbc
+    # Stream #0:0[0x17de]: Video: h264 (Main) ([27][0][0][0] / 0x001B), yuv420p(tv, bt709), 1280x720 [SAR 1:1 DAR 16:9], 50 fps, 50 tbr, 90k tbn, 100 tbc
+    # Stream #0:1[0x68](deu): Audio: mp2 ([3][0][0][0] / 0x0003), 48000 Hz, stereo, s16p, 192 kb/s (clean effects)
+    # Stream #0:2[0x6a](deu): Audio: ac3 ([6][0][0][0] / 0x0006), 48000 Hz, stereo, fltp, 384 kb/s (clean effects)
+    # Stream #0:3[0x6e](deu): Subtitle: dvb_subtitle ([6][0][0][0] / 0x0006)
+    #
+    # Stream #0:0[0x1e0]: Video: mpeg2video (Main), yuv420p, 720x576 [SAR 16:15 DAR 4:3], 25 fps, 25 tbr, 90k tbn, 50 tbc
+    # Stream #0:1[0x1c0]: Audio: mp2, 48000 Hz, stereo, s16p, 192 kb/s
+    ia=0
+    while read line
+    do
+	echo $line
+	typ=$(echo $line | cut -d \  -f 4)
+	typ=${typ//,/}
+	kenn=$(echo $line | cut -d "["  -f 2 | cut -d "]"  -f 1)
+	kenn=$(($kenn))
+	case $typ in
+	    "mpeg2video" | "mpeg1video")
+		m="V_MPEG-2, $filesjt, fps=25, track=$kenn"
+		echo $m
+		echo $m >> $meta
+		;;
+	    "h264")
+		#set -x
+		fps1=${line%% fps*}
+		nw=$(echo $fps1|wc -w)
+		fps=$(echo $fps1|cut -d \  -f $nw)
+		#exit
+		#sps="contSPS,"
+		#sei="insertSEI,"
+		#sei="forceSEI,"
+		#m="V_MPEG4/ISO/AVC, $filesjt, fps=25, insertSEI, contSPS, track=$kenn"
+		m="V_MPEG4/ISO/AVC, $filesjt, fps=$fps, $sei $sps track=$kenn"
+		echo $m
+		echo $m >> $meta
+		;;
+	    "hevc")
+		#set -x
+		fps1=${line%% fps*}
+		nw=$(echo $fps1|wc -w)
+		fps=$(echo $fps1|cut -d \  -f $nw)
+		#exit
+		sps="contSPS,"
+		sei="insertSEI,"
+		#sei="forceSEI,"
+		#m="V_MPEG4/ISO/AVC, $filesjt, fps=25, insertSEI, contSPS, track=$kenn"
+		#m="V_MPEGH/ISO/HEVC, $filesjt, fps=$fps, $sei $sps track=$kenn"
+		m="V_MPEGH/ISO/HEVC, $filesjt, fps=$fps, $sei $sps track=$kenn"
+		echo $m
+		echo $m >> $meta
+		;;
+	    "ac3"|"eac3")
+		if [ "$v" "<" "1.2.0" -o "$ffmpeg" != "ffmpeg" ]
+		then
+		    starta=${startar[$(($ia+1))]}
+		else
+		    #starta=$($ffprobe -i $infile -show_streams -select_streams a:$ia | grep "start_time=" | cut -d "=" -f 2)
+		    starta=$($ffprobe $infile -show_streams -select_streams a:$ia | grep "start_time=" | cut -d "=" -f 2)
+		fi
+		starta=${starta//./}
+		l=${#starta}
+		starta=${starta:0:$(($l-3))}
+		echo "starta=$starta" >> $log
+		if [ $starta -ge $startv ]
+		then
+		    tsh=$(($starta-$startv))
+		else
+		    tsh="-"$(($startv-$starta))
+		fi
+		lang=$(echo $line | cut -d "("  -f 2 | cut -d ")"  -f 1)
+		m="A_AC3, $filesjt, timeshift="$tsh"ms, track=$kenn, lang=$lang"
+		#m="A_AC3, $filesjt, track=$kenn, lang=$lang"
+		echo $m
+		echo $m >> $meta
+		ia=$(($ia+1))
+		;;
+	    "mp2" | "aac")
+		if [ "$v" "<" "1.2.0" -o "$ffmpeg" != "ffmpeg" ]
+		then
+		    starta=${startar[$(($ia+1))]}
+		else
+		    #starta=$($ffprobe -i $infile -show_streams -select_streams a:$ia | grep "start_time=" | cut -d "=" -f 2)
+		    starta=$($ffprobe $infile -show_streams -select_streams a:$ia | grep "start_time=" | cut -d "=" -f 2)
+		fi
+		starta=${starta//./}
+		l=${#starta}
+		starta=${starta:0:$(($l-3))}
+		echo "starta=$starta" >> $log
+		if [ $starta -ge $startv ]
+		then
+		    tsh=$(($starta-$startv))
+		else
+		    tsh="-"$(($startv-$starta))
+		fi
+		lang=$(echo $line | cut -d "("  -f 2 | cut -d ")"  -f 1)
+		if [ "$typ" == "mp2" ]
+		then
+		    typ2="MP3"
+		fi
+		if [ "$typ" == "aac" ]
+		then
+		    typ2="AAC"
+		fi
+		m="A_$typ2, $filesjt, timeshift="$tsh"ms, track=$kenn, lang=$lang"
+		#m="A_$typ2, $filesjt, track=$kenn, lang=$lang"
+		echo $m
+		echo $m >> $meta
+		ia=$(($ia+1))
+		;;
+	esac
+    done < $t2
+}
+
+meta_tsmuxer () {
+    tsMuxeR $f > $t
+    while read line
+    do
+	if [ "${line:0:9}" == "Track ID:" ]
+	then
+	    # Track ID:    256
+	    kenn=${line:13}
+	fi
+	if [ "${line:0:10}" == "Stream ID:" ]
+	then
+	    sid=${line:13}
+	    if [ "$sid" == "V_MPEG4/ISO/AVC" -o "$sid" == "V_MPEGH/ISO/HEVC" ]
+	    then
+		sps=". contSPS"
+		#sei=", insertSEI"
+		sei=", forceSEI"
+		h264="$sps $sei"
+	    fi
+	fi
+	if [ "${line:0:12}" == "Stream info:" ]
+	then
+	    if [[ "$line" == *"Frame rate:"* ]]
+	    then
+		fps=${line#*Frame rate: }
+	    fi
+	fi
+	if [ "${line:0:12}" == "Stream lang:" ]
+	then
+	    lang=${line:13}
+	fi
+	if [ "${line:0:13}" == "Stream delay:" ]
+	then
+	    delay=${line:14}
+	fi
+	if [ "$line" == "" -a "$sid" != "" ]
+	then
+	    #m="$sid, $filesjt, timeshift="$tsh"ms, track=$kenn, lang=$lang"
+	    m="$sid, $f, track=$kenn"
+	    if [ "$lang" != "" ]
+	    then
+		m="$m, lang=$lang"
+	    fi
+	    if [ "$delay" != "" ]
+	    then
+		m="$m, timeshift="$delay"ms"
+	    fi
+	    if [ "$fps" != "" -a "$fps" != "not found" ]
+	    then
+		m="$m, fps="$fps$h264
+	    fi
+	    #else
+	    if [ "$fps" == "not found" ]
+	    then
+		m="$m, fps=50"
+	    fi
+	    echo $m
+	    echo $m >> $meta
+	    sid=
+	    fps=
+	fi
+    done < $t
+}
+    #meta_ffprobe
+    meta_tsmuxer
+    cat $meta >> $log
+    #exit
+    #rm -f $file
+    if [ "$split" != "" ]
+    then
+	ofile="$dest/0000.ts"
+    else
+	ofile="$dest/00001.ts"
+    fi
+    nice tsMuxeR $meta $ofile
+    if [ "$split" != "" ]
+    then
+	# 0000.split.1.ts
+	w2="$dest/*.ts"
+	for r in $w2
+	do
+	    r2=${r//.split./}
+	    mv $r $r2
+	done
+    fi
+    #file_check $file
+    #cat $t >> $log
+    #opt="$gopt -i $filej2 $ffopt $ofile"
+    #opt="$gopt $form -i $file $ffopt $ofile"
+    #echo ffmpeg $opt >> $log
+    #wlog "$ffmpeg $opt"
+    #nice $ffmpeg $opt
+    #rm -f $file
+    #rm -f $meta
+fi
+
+if [ -e $vdr ]
+then
+    echo "genindex"
+    #wd=$(pwd)
+    #$vdr --genindex="$wd"
+    $vdr --genindex="./$dest"
+fi
+
+#ffmpeg -i 00001.ts 2>> $log
+ffprobe -i $dest/00001.ts 2>> $log
+
+if [ -e $videodir ]
+then
+    /usr/bin/touch $videodir/.update
+fi
+
+#d=`date +"%F %T"`
+#echo "Ende $d" >> $log
+wlog "Ende"
+ende=$(date +"%s")
+sek=$(($ende-$start))
+min=$(($sek/60))
+echo "$min Minuten" >> $log
+#size2=$(du)
+size2=$(du $dest)
+size2=$(echo $size2 | cut -d ' ' -f 1)
+comp=$(($size1*100/$size2))
+echo "vorher " $size1  >> $log
+echo "nachher" $size2  >> $log
+echo "Kompression: $comp %" >> $log

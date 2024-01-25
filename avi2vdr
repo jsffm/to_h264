@@ -1,0 +1,865 @@
+#!/bin/bash
+
+#set -x
+
+#profile="-profile:v main -level 4.0"
+profile="-profile:v high -level 3.0"
+#profile="-profile:v high -level 4.1"
+#deinterlace="-filter:v yadif"
+#deinterlace="-flags +ilme+ildct"
+crf=21          # Qualität, default 23, kleiner ist besser
+#crf=23          # Qualität, default 23, kleiner ist besser
+#gop="-g 50"     # verbessert die Navigation, default 250
+#scale="-vf scale=720:576:interl=1"
+#scale="-vf scale=1920:1080 -flags +ilme+ildct+alt"
+#scale="-vf scale=1920:1080 -flags +ilme+ildct -alternate_scan 1 -top 0 -x264opts bff=1"
+#scale="-vf scale=1920:1080 -flags +ilme+ildct -x264opts tff=1"
+#scale="-r 25 -vf scale=1920:1080 -flags +ilme+ildct -x264opts tff=1"
+#scale="-vf scale=1280:720"
+#crop="-vf crop=720:456:0:56 -aspect 16:9"
+aac_br=96k
+aaclib="libfdk_aac" # Fraunhofer Library
+#probesize="-probesize 1000000000 -analyzeduration 1000000000"	# default 5000000
+#filter="-bsf h264_mp4toannexb"
+#filter="-bsf h264_mp4toannexb -fflags igndts+genpts"
+#filter="-bsf h264_mp4toannexb -mpegts_m2ts_mode 1 -mpegts_service_type mpeg2_digital_hdtv -mpegts_flags system_b"
+#filter="-bsf h264_mp4toannexb -mpegts_m2ts_mode 1 -mpegts_service_type mpeg2_digital_hdtv"
+#mp2=copy
+#mpeg2=copy
+hevc=copy
+#hevc=h264
+#vc1=h264
+#h264enc=nvenc_h264
+h264enc=libx264
+hevcenc=hevc_nvenc
+#popt="-copyts"
+#popt="-copytb 1"
+#popt="-copytb 0"
+#popt="-mpegts_copyts 1"
+#popt="-mpegts_flags resend_headers"
+#popt="-dts_delta_threshold 0"
+#popt="$popt -vsync drop"
+#gopt="-fflags +genpts"
+gopt="-fflags +igndts+genpts"
+#gopt="-fflags +genpts -fix_sub_duration"
+
+#ac3=aac
+#dts=eac3
+#dts=ac3
+dts=copy
+#mkv=yes
+#outf=mkv
+#outf=mp4
+#outf=avi
+
+#test="-t 60" # Sekunden
+
+if [ -e /etc/avi2vdr.conf ]
+then
+    conf=/etc/avi2vdr.conf
+fi
+if [ -e $0.conf ]
+then
+    conf=$0.conf
+fi
+if [ "$conf" == "" ]
+then
+    wo=$(which avi2vdr)
+    conf=$wo.conf
+fi
+if [ "$conf" == "" ]
+then
+    echo "conf-Datei fehlt."
+    exit 8
+fi
+#exit
+
+. $conf
+
+#set -x
+
+if [ "$mkv" == "yes" ]
+then
+    outf=mkv
+fi
+if [ "$2" != "" ]
+then
+    outf=$2
+fi
+if [ "$2" == "oly" ]
+then
+    outf=mkv
+    ac3=aac
+fi
+
+#grep 4E info.vdr
+
+if [ "$1" == "" ]
+then
+    #w="*.avi"
+    #w="*.m2ts"
+    #w="*.mkv"
+    #w="*.MPG"
+    w="*.mpg"
+    f=$(ls $w)
+    nw=$(echo $f|wc -w)
+    if [ $nw -gt 1 ]
+    then
+	fin="-i concat:"
+	for i in $f
+	do
+	    fin="$fin$i|"
+	done
+	fin=${fin:0:$((${#fin}-1))}
+	f=$(echo $f|cut -d \  -f 1)
+    fi
+else
+    f="$1"
+    f2=$(echo "$1"|tr ' ' '_')
+    if [ "$f" != "$f2" ]
+    then
+	# Blanks if filename?
+	#f=$(echo "$@"|tr ' ' '_')
+	ln -s "$f" $f2
+	f=$f2
+    fi
+    #fin="-i \"$f\""
+    fin="-i $f"
+    ext=${f##*.}
+fi
+
+fn=${f%.*}
+
+#exit
+
+
+word_before() {
+    erg1=${1%%$2*}
+    nw=$(echo $erg1|wc -w)
+    erg=$(echo $erg1|cut -d \  -f $nw)
+    echo $erg
+}
+
+word_after() {
+    erg1=${1##*$2}
+    erg=$(echo $erg1|cut -d \  -f 1)
+    echo $erg
+}
+
+start=$(date +"%s")
+
+t=/tmp/avi
+ffmpeg $fin 2> $t
+
+create=$(grep -i date $t|cut -d ':' -f 2-)
+#date -d $create
+if [ "$create" == "" ]
+then
+    create=$(grep -i creation_time $t | head -n 1 | cut -d ':' -f 2-)
+    #create=$(echo $create | head -n 1)
+fi
+#exit
+
+#set -x
+if [ -e info.vdr ]
+then
+    while read line
+    do
+	if [ "${line:0:1}" == "E" ]
+	    then
+	    echo $line
+	    s=$(echo $line | cut -d \  -f 3)
+	fi
+    done < info.vdr
+    d=$(date +%F.%H.%M -d @$s)
+    di=$d."3-0.rec"
+else
+    #d=$(ls --full-time 001.vdr)
+    #d=$(ls -l --time-style="+%F.%H.%M" $f | cut -d ' ' -f6)
+    d=$(date "+%F.%H.%M" -r $f)
+    if [ "$create" != "" ]
+    then
+	d=$(date "+%F.%H.%M" -d $create)
+    fi
+    di=$d."3-0.rec"
+fi
+#exit
+d32=0
+while [ -e $di ]
+do
+    d32=$(($d32+1))
+    di=$d.3-$d32.rec
+done
+#echo $di
+#exit
+#if [ "$mkv" == "yes" ]
+if [ "$outf" != "" ]
+then
+    di="."
+    ofile=${f%.*}.$outf
+    if [ -e $ofile ]
+    then
+	ofile=${f%.*}-2.$outf
+	if [ "$vcodec" != "" ]
+	then
+	    ofile=${f%.*}-$vcodec.$outf
+	fi
+	#d=$(echo $PWD | tr ' ' '_')
+	#ofile=$(basename $d).$outf
+	#if [ "$ofile" == "$f" ]
+	#then
+	    #ofile=$(basename $d)"-2.$outf"
+	#fi
+	if [ -e $ofile ]
+	then
+	    echo "$ofile already exists!"
+	    exit 8
+	fi
+    fi
+    gop=""
+else
+    mkdir $di
+    ofile=$di/00001.ts
+fi
+log=$di/logfile
+if [ "$outf" != "" ]
+then
+    #log=$ofile.log
+    fno=${ofile%.*}
+    log=$fno.log
+fi
+#exit
+if [ -e $log ]
+then
+    mv $log $di/logfile.old
+fi
+d=`date +"%F %T"`
+echo "Start $d "$(basename $0) $(hostname) > $log
+pwd >> $log
+uname -p >> $log
+echo "outf=$outf" >> $log
+
+#set -x
+if [ "$crop" != "" ]
+then
+    echo $crop
+    echo $crop >> $log
+fi
+scantype=$(mediainfo --Inform="Video;%ScanType/String%" "$f")
+echo "scantype=$scantype" >> $log
+if [ "$scantype" == "Progressive" ]
+then
+    deinterlace=
+else
+    opt_r="-r 50"
+fi
+echo "deinterlace=$deinterlace" >> $log
+mediainfo --Inform="Video;%FrameRate%" "$f" >> $log
+#exit
+#ls -l $w >> $log
+fr=$(realpath $f)
+ls=$(ls -l "$fr")
+echo $ls >> $log
+size1=$(echo $ls|cut -d \  -f 5)
+#mv *.vdr $di/
+#mv $f $di/00001.ts
+t=/tmp/avi
+t2=/tmp/avi2
+
+#meta=meta
+#echo "MUXOPT --no-pcr-on-video-pid --new-audio-pes --vbr  --vbv-len=500" > $meta
+ffmpeg -hide_banner -i "$f" 2> $t
+dur1=$(grep "Duration" $t)
+# Duration: 02:12:07.88, start: 0.213367, bitrate: 837 kb/s
+vbr=$(word_before "$dur1" "kb/s")
+#exit
+grep "Stream" $t > $t2
+cat $t2
+cat $t >> $log
+
+# Stream #0:0(eng): Video: h264 (Main), yuv420p, 720x576 [SAR 64:45 DAR 16:9], 25 fps, 25 tbr, 1k tbn, 50 tbc (default)
+# Stream #0:0: Video: mpeg4 (Advanced Simple Profile) (XVID / 0x44495658), yuv420p, 720x304 [SAR 1:1 DAR 45:19], 25 tbr, 25 tbn, 25 tbc
+# Stream #0:1(deu): Audio: ac3, 48000 Hz, stereo, s16, 448 kb/s (default)
+# Stream #0:1: Audio: ac3 ([0] [0][0] / 0x2000), 48000 Hz, 5.1(side), s16, 448 kb/s
+# m2ts
+# Stream #0:0[0x1011]: Video: mpeg2video (Main) ([2][0][0][0] / 0x0002), yuv420p, 720x576 [SAR 64:45 DAR 16:9], 6470 kb/s, 25 fps, 25 tbr, 90k tbn, 50 tbc
+# Stream #0:1[0x1100](deu): Audio: ac3 (AC-3 / 0x332D4341), 48000 Hz, stereo, s16, 448 kb/s
+# mkv
+# Stream #0:1(ger): Audio: dts (DTS), 48000 Hz, 5.1(side), s16, 1536 kb/s (default)
+# Stream #0:2(eng): Audio: dts (DTS), 48000 Hz, 5.1(side), s16, 1536 kb/s
+# Stream #0:1(eng): Audio: aac, 48000 Hz, 5.1, fltp (default)
+# mp3
+# Stream #0:1: Audio: mp3 (U[0][0][0] / 0x0055), 44100 Hz, stereo, s16p, 119 kb/s
+# mp4
+# Stream #0:0(und): Video: h264 (High) (avc1 / 0x31637661), yuv420p, 720x404 [SAR 1:1 DAR 180:101], 330 kb/s, 25 fps, 25 tbr, 25k tbn, 50 tbc (default)
+# Stream #0:1(und): Audio: aac (HE-AAC) (mp4a / 0x6134706D), 44100 Hz, stereo, fltp, 74 kb/s (default)
+# Stream #0:1(deu): Audio: pcm_s16le, 48000 Hz, stereo, s16, 1536 kb/s
+
+set_hevc() {
+    crf=25
+    #h265_level="-level 4.1"
+    #h265_level="-x265-params crf=$crf:level-idc=4.1:preset=fast"
+    h265_level="-x265-params crf=$crf:level-idc=4.1"
+    #profile="-profile:v main -level 3"
+    #preset="-preset fast $h265_level -crf $crf $maxr"
+    if [ "$hevcenc" == "hevc_nvenc" ]
+    then
+	h265_profile=main
+	h265_level="-level 4.1"
+	#nvenc_b="-b:v 2M"
+	nvenc_b=$hevcenc_b
+	maxr=
+	#opt_crf="-crf $crf"
+	#h265_level="-preset hq -profile:v $h265_profile $h265_level $opt_crf $nvenc_b $maxr"
+	h265_level="-preset hq -profile:v $h265_profile $h265_level -rc vbr $opt_crf $opt_r $nvenc_b $maxr $crop"
+    fi
+    preset="$h265_level"
+    preset="$preset $gop"
+    #video="-c:v libx265 $preset $deinterlace $scale $aspect"
+    video="-c:v $hevcenc $fps $preset $deinterlace $scale $aspect"
+}
+
+set_h264() {
+    #br=2000
+    #br=$vbr
+    #preset="-preset fast -tune film -profile:v main $level -crf $crf -maxrate "$br"k -bufsize 1835k"
+    preset="-preset fast -tune film $profile -crf $crf $maxr"
+    if [ "$h264enc" == "nvenc_h264" ]
+    then
+	preset="-preset hq $profile -cq $crf $maxr"
+    fi
+    preset="$preset $gop"
+    #fps="-r 25"
+    video="-c:v $h264enc $fps $preset $deinterlace $scale $aspect $crop"
+}
+
+set_vp9() {
+    # crf 0..63
+    crf=33
+    video="-c:v libvpx-vp9 $gop -b:v 0 -crf $crf -threads 16 -tile-columns 6 -frame-parallel 1"
+}
+
+chk_lang() {
+    if [[ "$lang_no" == *$lang* ]]
+    then
+	echo 1
+    fi
+}
+
+map="-map 0:v:0"
+#set -x
+astream=0
+while read line
+do
+    # Stream #0:11(ger): Subtitle: dvd_subtitle, 1920x1080
+    #set -x
+    echo $line
+    typ=$(echo $line | cut -d ' ' -f 4)
+    typ=${typ//,/}
+    w3=$(echo $line | cut -d ' ' -f 3)
+    if [ "$w3" == "Video:" -a "$typ" != "png" ]
+    then
+	videof=$typ
+    fi
+    #track=$(echo $line | cut -d '[' -f 2 | cut -d ']' -f 1)
+    #track=$(($track))
+    stream1=$(echo $line | cut -d ' ' -f 2 | cut -d ':' -f 2 | cut -d ':' -f 1)
+    #if [[ "$stream1" == "*(*" ]]
+    #then
+	#echo found
+    #fi
+    if [ "$ext" == "mpg" -o "$ext" == "ts" ]
+    then
+	stream1=${stream1:0:1}
+    else
+	stream1=$(echo $stream1|cut -d "(" -f 1)
+	lang=$(echo $line|cut -d "(" -f 2|cut -d ")" -f 1)
+    fi
+    stream=$(($stream1-1))
+    #exit
+    case $typ in
+	"hevc")
+	    if [ "$vcodec" != "" -a "$hevc" == "" ]
+	    then
+		hevc=$vcodec
+	    fi
+	    case $hevc in
+		"h264")
+		    #br=2000
+		    #br=$vbr
+		    #preset="-preset fast -tune film -profile:v main $level -crf $crf -maxrate "$br"k -bufsize 1835k"
+		    #preset="-preset fast -tune film $profile -crf $crf"
+		    #preset="$preset $gop"
+		    #fps="-r 25"
+		    #video="-c:v libx264 $fps $preset $deinterlace $scale $aspect $crop"
+		    set_h264
+		    #echo "H264" > $di/info.txt
+		    ;;
+		"copy")
+		    video="-c:v copy"
+		    ;;
+		"hevc")
+		    set_hevc
+		    ;;
+	    esac
+	    ;;
+	"mpeg4"|"msmpeg4v3"|"msmpeg4v2")
+	    if [ "$vcodec" != "" -a "$mpeg4" == "" ]
+	    then
+		mpeg4=$vcodec
+	    fi
+	    #br=2000
+	    br=$vbr
+	    #preset="-preset fast -tune film $profile -crf $crf -maxrate "$br"k -bufsize 1835k"
+	    #preset="$preset $gop"
+	    #fps="-r 25"
+	    #video="-c:v libx264 $fps $preset $deinterlace $scale $aspect $crop"
+	    maxr="-maxrate "$br"k -bufsize 1835k"
+	    set_h264
+	    if [ "$outf" == "avi" ]
+	    then
+		video="-c:v copy"
+	    fi
+	    if [ "$mpeg4" == "hevc" ]
+	    then
+		set_hevc
+	    fi
+	    #echo "H264" > $di/info.txt
+	    ;;
+	"vp6f")
+	    if [ "$vcodec" != "" -a "$vp6f" == "" ]
+	    then
+		if [ "$vcodec" == "h264" ]
+		then
+		    br=$(($vbr*2))
+		    if [ $br -gt 2000 ]
+		    then
+			br=2000
+		    fi
+		    #preset="-preset fast -tune film $profile -crf $crf -maxrate "$br"k -bufsize 1835k"
+		    #preset="$preset $gop"
+		    #video="-c:v libx264 $preset $deinterlace $aspect $crop"
+		    maxr="-maxrate "$br"k -bufsize 1835k"
+		    set_h264
+		fi
+	    else
+		video="-c:v copy"
+	    fi
+	    ;;
+	"mpeg2video"|"mpeg1video")
+	    if [ "$vcodec" != "" -a "$mpeg2" == "" ]
+	    then
+		mpeg2=$vcodec
+	    fi
+	    if [ "$mpeg2" == "copy" ]
+	    then
+		#gopt="-genpts"
+		#gopt="-fflags +genpts"
+		video="-c:v copy"
+		#video="-timecode_frame_start 0 -c:v copy"
+	    else
+		#br=2000
+		br=$(($vbr/2))
+		if [ $br -gt 2000 ]
+		then
+		    br=2000
+		fi
+		#preset="-preset fast -tune film $profile -crf $crf -maxrate "$br"k -bufsize 1835k"
+		#preset="$preset $gop"
+		#video="-c:v libx264 $preset $deinterlace $aspect $crop"
+		maxr="-maxrate "$br"k -bufsize 1835k"
+		set_h264
+		if [ "$outf" == "avi" ]
+		then
+		    video="-c:v mpeg4 -b:0 $br -q:0 5"
+		    #video="-c:v libxvid"
+		fi
+	    fi
+	    if [ "$mpeg2" == "hevc" ]
+	    then
+		set_hevc
+	    fi
+	    #echo "H264" > $di/info.txt
+	    #echo "V_MPEG-2, \"$f\", fps=25, track=$track" >> $meta
+	    ;;
+	#"h264"|"vc1")
+	"h264")
+	    if [ "$vcodec" != "" -a "$h264" == "" ]
+	    then
+		h264=$vcodec
+	    fi
+	    video="-c:v copy"
+	    if [ "$h264" == "h264" -o "$crop" != "" -o "$scale" != "" ]
+	    then
+		#preset="-preset fast -tune film $profile -crf $crf"
+		#preset="$preset $gop"
+		#video="-c:v libx264 $preset $deinterlace $aspect $crop $scale"
+		set_h264
+	    fi
+	    #filter="-bsf h264_mp4toannexb"
+	    #br=$vbr
+	    #br=10000
+	    #preset="-preset fast -tune film -profile:v main $level -crf $crf -maxrate "$br"k -bufsize 1835k"
+	    #preset="$preset $gop"
+	    #fps="-r 25"
+	    #video="-c:v libx264 $fps $preset $deinterlace $scale $aspect $crop"
+	    #echo "H264" > $di/info.txt
+	    if [ "$h264" == "hevc" ]
+	    then
+		set_hevc
+	    fi
+	    if [ "$h264" == "vp9" ]
+	    then
+		set_vp9
+	    fi
+	    ;;
+	"vc1")
+	    #set -x
+	    if [ "$vcodec" != "" -a "$vc1" == "" ]
+	    then
+		vc1=$vcodec
+	    fi
+	    video="-c:v copy"
+	    if [ "$vc1" == "h264" ]
+	    then
+		#preset="-preset fast -tune film -profile:v main $level -crf $crf -maxrate "$br"k -bufsize 1835k"
+		#preset="-preset fast -tune film $profile -crf $crf"
+		#preset="$preset $gop"
+		#video="-c:v libx264 $preset $deinterlace $aspect $crop"
+		set_h264
+	    fi
+	    if [ "$vc1" == "hevc" ]
+	    then
+		set_hevc
+	    fi
+	    ;;
+	"wmv3")
+            #preset="-preset fast -tune film $profile -crf $crf"
+	    #preset="$preset $gop"
+            #video="-c:v libx264 $preset $deinterlace $aspect $crop"
+            set_h264
+            ;;
+	#"ac3"|"eac3")
+	"ac3")
+	    # Stream #0:1(deu): Audio: ac3 48000 Hz stereo fltp 448 kb/s (default)
+	    #set -x
+	    #map="$map -map 0:a:$stream"
+	    map="$map -map 0:$stream1"
+	    a="-c:a:$astream copy"
+	    if [ "$ac3_stereo" != "" ]
+	    then
+		line2=${line//,/}
+		atyp1=${line2#*Hz*}
+		atyp=$(echo $atyp1 | cut -d ' ' -f 1)
+		atyp=${atyp//,/}
+		if [ "$atyp" == "stereo" ]
+		then
+		    bra1=${line2%kb/s*}
+		    nw=$(echo $bra1|wc -w)
+		    bra=$(echo $bra1|cut -d \  -f $nw)
+		    if [ $bra -gt $ac3_stereo ]
+		    then
+			a="-c:a:$astream $aaclib -ac:a:$astream 2 -b:a:$astream $aac_br"
+		    fi
+		fi
+	    fi
+	    if [ "$ac3" == "aac" ]
+	    then
+		line2=${line//,/}
+		atyp1=${line2#*Hz*}
+		atyp=$(echo $atyp1 | cut -d ' ' -f 1)
+		atyp=${atyp//,/}
+		if [ "$atyp" == "stereo" ]
+		then
+		    a="-c:a:$astream $aaclib -ac:a:$astream 2 -b:a:$astream $aac_br"
+		else
+		    a="-c:a:$astream $aaclib -ac:a:$astream 2 -b:a:$astream $aac_br -af:$astream aresample=matrix_encoding=dplii"
+		    #a="-c:a:$astream $aaclib -ac 2 -b:a:$astream $aac_br -af:$astream aresample=matrix_encoding=dplii"
+		fi
+	    fi
+	    if [ "$ac3" == "eac3" ]
+	    then
+		br=256k
+		a="-c:a:$astream $ac3 -b:a:$astream $br"
+	    fi
+	    #a="-c:a:$astream $aaclib -b:a:$astream 384k"
+	    astream=$(($astream+1))
+	    #c=copy
+	    #echo "A_AC3, \"$f\", track=$track, lang=deu" >> $meta
+	    #exit
+	    ;;
+	"eac3")
+	    #set -x
+	    #echo $line
+	    map="$map -map 0:$stream1"
+	    a="-c:a:$astream copy"
+	    #  Stream #0:3(fre): Audio: eac3, 48000 Hz, 5.1(side), fltp, 1536 kb/s (default)
+	    lang=$(echo $line|cut -d "(" -f 2|cut -d ")" -f 1)
+	    br1=${line%kb/s*}
+	    nw=$(echo $br1|wc -w)
+	    br1=$(echo $br1|cut -d \  -f $nw)
+	    set_eac3_256() {
+		#br="448k"
+		br="256k"
+		a="-c:a:$astream eac3 -b:a:$astream $br"
+		#exit
+	    }
+	    if [  "$br1" == "fltp" -o "$br1" == "(default)" ]
+	    then
+		br1=768
+	    fi
+	    #if [ "$lang" == "fre" -a $br -gt 768 -o "$vcodec" == "hevc" -a $br -gt 256 ]
+	    #if [ "$lang" != "ger" -a $br -gt 768 -o "$vcodec" == "hevc" -a $br -gt 256 ]
+	    if [ "$lang" != "ger" -a $br1 -gt 768 ]
+	    then
+		set_eac3_256
+	    fi
+	    if [ "$vcodec" == "hevc" -a $br1 -gt 256 ]
+	    then
+		set_eac3_256
+	    fi
+	    #exit
+	    if [ "$eac3" == "dts" ]
+	    then
+		br="768k"
+		a="-strict -2 -c:a:$astream dca -b:a:$astream $br"
+	    fi
+	    if [ "$eac3" == "eac3+ac3" ]
+	    then
+		a="-c:a:$astream copy"
+		if [ "$lang" == "ger" -o "$lang" == "deu" -o "$lang" == "eng" ]
+		then
+		    map="$map -map 0:$stream1"
+		    astream=$(($astream+1))
+		    br="640k"
+		    a="$a -c:a:$astream ac3 -b:a:$astream $br"
+		fi
+	    fi
+	    if [ "$eac3" == "copy" ]
+	    then
+		a="-c:a:$astream copy"
+	    fi
+	    astream=$(($astream+1))
+	    #exit
+	    ;;
+	"mp3"|"mp2")
+	    #set -x
+	    #map="$map -map 0:a:$stream"
+	    map="$map -map 0:$stream1"
+	    if [ "$mp2" == "copy" ]
+	    then
+		a="-c:a:$astream copy"
+	    else
+		#set -x
+		#br="128k"
+		#n=8
+		#if [ "$typ" == "mp2" ]
+		#then
+		#    n=5
+		#fi
+		#ar1=$(echo $line | cut -d ' ' -f $n)
+		ar1=${line%Hz*}
+		nw=$(echo $ar1|wc -w)
+		ar1=$(echo $ar1|cut -d \  -f $nw)
+		if [ $ar1 -ne 48000 ]
+		then
+		    ar="-ar:a:$astream 48000"
+		fi
+		#a="-c:a:$astream $aaclib -b:a:$astream $aac_br $ar"
+		a="-c:a:$astream $aaclib -vbr 3 $ar"
+		#exit
+	    fi
+	    astream=$(($astream+1))
+	    #c=copy
+	    #exit
+	    ;;
+	"pcm_s16le")
+	    #set -x
+	    map="$map -map 0:$stream1"
+	    #a="-c:a:$astream $aaclib -b:a:$astream $aac_br $ar"
+	    a="-c:a:$astream $aaclib -b:a:$astream $aac_br"
+	    astream=$(($astream+1))
+	    ;;
+	"dts")
+	    #map="$map -map 0:a:$stream"
+	    #a="-c:a:$astream eac3 -b:a:$astream $br"
+	    if [ "$dts" == "copy" ]
+	    then
+		a="-c:a:$astream $dts"
+	    fi
+	    if [ "$dts" == "eac3" -o "$dts" == "ac3" ]
+	    then
+		br="448k"
+		if [ "$dts" == "eac3" ]
+		then
+		    br="256k"
+		    #br="448k"
+		fi
+		a="-c:a:$astream $dts -b:a:$astream $br"
+	    fi
+	    if [ "$dts" != "" ]
+	    then
+		map="$map -map 0:$stream1"
+		astream=$(($astream+1))
+	    fi
+	    #c=copy
+	    ;;
+	"aac")
+	    #set -x
+	    ar1=${line%Hz*}
+	    nw=$(echo $ar1|wc -w)
+	    ar1=$(echo $ar1|cut -d \  -f $nw)
+	    line2=${line//,/}
+	    bra1=${line2%kb/s*}
+	    nw=$(echo $bra1|wc -w)
+	    bra=$(echo $bra1|cut -d \  -f $nw)
+	    atyp1=${line2#*Hz*}
+	    atyp=$(echo $atyp1 | cut -d ' ' -f 1)
+	    atyp=${atyp//,/}
+	    if [ $ar1 -ne 48000 ]
+	    then
+		ar="-ar:a:$astream 48000"
+		#a="-c:a:$astream $aaclib -b:a:$astream $aac_br $ar"
+		a="-c:a:$astream $aaclib -vbr 3 $ar"
+	    else
+		a="-c:a:$astream copy"
+	    fi
+	    if [ $bra -gt 128 ]
+	    then
+		a="-c:a:$astream $aaclib -b:a:$astream $aac_br $ar"
+	    fi
+	    if [ "$atyp" != "stereo" ]
+	    then
+		a="-c:a:$astream copy"
+	    fi
+	    map="$map -map 0:$stream1"
+	    astream=$(($astream+1))
+	    #exit
+	    ;;
+        "wmapro")
+            map="$map -map 0:$stream1"
+            br="448k"
+            a="-c:a:$astream ac3 -b:a:$astream $br"
+	    ;;
+	"subrip"|"mov_text"|"ass"|"dvb_teletext"|"dvd_subtitle")
+	    if [ "$subtitle" == "no" ]
+	    then
+		continue
+	    fi
+	    map="$map -map 0:$stream1"
+	    #a="-c:s dvb_subtitle"
+	    a="-c:s copy"
+	    #a="-c:s srt"
+	    #a="-c:s:$astream dvb_subtitle"
+	    #astream=$(($astream+1))
+	    #continue
+	    ;;
+	"png")
+	    if [ "$outf" == "mp4" ]
+	    then
+		#map="$map -map 0:$stream1"
+		#a="-c:0:$stream copy"
+		#a="-c:v:1 copy"
+		echo "fix it"
+	    fi
+	    #continue
+	    ;;
+	"dvd_nav_packet"|"hdmv_pgs_subtitle"|"for"|"none"|"bin_data")
+	    continue
+	    ;;
+	*)
+	    echo "Codec $typ unkown"
+	    exit 8
+	    ;;
+    esac
+    audio="$audio $a"
+    a=""
+done < $t2
+
+if [ "$hwaccel" == "cuvid" ]
+then
+    #set -x
+    echo hwaccel=$hwaccel >> $log
+    case $videof in
+        hevc)
+	    gopt="$gopt -hwaccel cuvid -c:v hevc_cuvid"
+            #gopt="$gopt -c:v hevc_cuvid"
+            ;;
+        h264)
+            gopt="$gopt -hwaccel cuvid -c:v h264_cuvid"
+            #gopt="$gopt -c:v h264_cuvid"
+            ;;
+        vc1)
+            gopt="$gopt -hwaccel cuvid -c:v h264_cuvid"
+            #gopt="$gopt -c:v vc1_cuvid"
+            ;;
+        mpeg4)
+            gopt="$gopt -hwaccel cuvid -c:v mpeg2_cuvid"
+            #gopt="$gopt -c:v mpeg4_cuvid"
+            ;;
+        mpeg2video)
+            gopt="$gopt -hwaccel cuvid -c:v mpeg2_cuvid"
+            #gopt="$gopt -c:v mpeg2_cuvid"
+            ;;
+    esac
+    #exit
+fi
+#exit
+echo "map=$map" >> $log
+echo "video=$video" >> $log
+echo "audio=$audio" >> $log
+if [ -e ffmetadata -a "$ffmetadata" == "yes" ]
+then
+    fin="$fin -i ffmetadata -map_chapters 1"
+fi
+#opt="$probesize -i $f $map $video $filter $audio -copyts $test $ofile"
+#opt="$gopt $probesize $fin $map $video $filter $audio -copyts $test $ofile"
+opt="$gopt $probesize $fin $map $video $filter $audio $popt $test $ofile"
+echo ffmpeg $opt >> $log
+#exit
+err=${ofile%.*}".err"
+nice ffmpeg $opt 2>&1 | tee $err
+ffmpeg -hide_banner -i $ofile 2> $t
+cat $t >> $log
+#tsMuxeR $meta $di/00001.ts
+#exit
+#cd $di
+#chmod -x *
+#genindex
+#cd
+
+#echo "size1=$size1" >> $log
+#if [ "$mkv" != "yes" ]
+if [ "$outf" == "" ]
+then
+    vdr=$VDRDIR/vdr
+
+    #wd=$(pwd)
+    #$vdr --genindex="$wd"
+    $vdr --genindex="./$di"
+    #echo "H264" > $di/info.txt
+    echo $vcodec > $di/info.txt
+    echo $(du ./$di) >> $log
+else
+    if [ "$create" != "" ]
+    then
+	touch -d $create $ofile
+    else
+	touch -r $f $ofile
+    fi
+fi
+
+ls -l $ofile >> $log
+s=$(ls -l $ofile)
+size2=$(echo $s|cut -d \  -f 5)
+#echo "size2=$size2" >> $log
+echo "vorher " $size1  >> $log
+echo "nachher" $size2  >> $log
+comp=$(($size1*100/$size2))
+echo "Kompression: $comp %" >> $log
+d=`date +"%F %T"`
+echo "Ende $d" >> $log
+ende=$(date +"%s")
+sek=$(($ende-$start))
+min=$(($sek/60))
+echo "$min Minuten" >> $log

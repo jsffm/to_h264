@@ -1,0 +1,24 @@
+#!/bin/bash
+
+set -x
+
+dir="."
+if [ "$1" != "" ]
+then
+    dir=$1
+fi
+
+fo=$(basename $PWD)"-t.mkv"
+
+v=$(ls $dir/*.vc1 $dir/*.h264 $dir/*.hevc)
+a=$(ls $dir/*.ac3)
+s=$(ls $dir/*.sup)
+#s=$(ls $dir/*.mkv)
+
+mkvmerge -o $fo $v $a $s
+
+ffprobe -hide_banner -i $fo
+
+
+
+
